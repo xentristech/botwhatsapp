@@ -29,7 +29,9 @@ from pydantic import BaseModel
 
 from agent import catalogo
 from agent.db import (
+    crear_producto,
     es_modo_humano,
+    existe_producto_codigo,
     listar_citas,
     listar_conversaciones,
     listar_cotizaciones,
@@ -331,6 +333,36 @@ async def api_productos(q: str = "", categoria: str = "", limite: int = 60):
         }
         for p in prods
     ]
+
+
+class ProductoNuevoBody(BaseModel):
+    nombre: str
+    categoria: str = "General"
+    precio_publico: int = 0
+    precio_mayoreo: int = 0
+    codigo: str | None = None
+    descripcion: str | None = None
+    uso: str | None = None
+
+
+@app.post("/api/producto/nuevo")
+async def api_producto_nuevo(body: ProductoNuevoBody):
+    """Crea un producto nuevo desde el dashboard; el bot lo incluye al instante."""
+    if not (body.nombre or "").strip():
+        return JSONResponse({"error": "El nombre es obligatorio"}, status_code=400)
+    codigo = (body.codigo or "").strip().upper()
+    if codigo and (catalogo.obtener(codigo) or existe_producto_codigo(codigo)):
+        return JSONResponse({"error": "Ese código ya existe"}, status_code=400)
+    nuevo = crear_producto({
+        "codigo": codigo,
+        "nombre": body.nombre.strip(),
+        "categoria": (body.categoria or "General").strip(),
+        "precio_publico": body.precio_publico,
+        "precio_mayoreo": body.precio_mayoreo,
+        "descripcion": (body.descripcion or "").strip(),
+        "uso": (body.uso or "").strip(),
+    })
+    return {"ok": True, "codigo": nuevo}
 
 
 class ProductoBody(BaseModel):

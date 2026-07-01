@@ -107,6 +107,22 @@ def init_db() -> None:
                 observaciones  TEXT,
                 actualizado    TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS producto_nuevo (
+                codigo         TEXT PRIMARY KEY,
+                categoria      TEXT,
+                nombre         TEXT,
+                descripcion    TEXT,
+                material       TEXT,
+                uso            TEXT,
+                tallas         TEXT,
+                colores        TEXT,
+                precio_publico INTEGER,
+                precio_mayoreo INTEGER,
+                marca          TEXT,
+                observaciones  TEXT,
+                creado         TEXT
+            );
             """
         )
         # Columna 'origen' en mensajes (cliente | bot | humano) — migracion suave.
@@ -505,6 +521,59 @@ def set_override(codigo: str, campos: dict) -> None:
                 f"INSERT INTO producto_override ({', '.join(cols)}) VALUES ({ph})",
                 vals,
             )
+
+
+def listar_productos_nuevos() -> list[dict]:
+    """Productos creados desde el dashboard (se suman al catálogo del bot)."""
+    campos = ["codigo", "categoria", "nombre", "descripcion", "material", "uso",
+              "tallas", "colores", "precio_publico", "precio_mayoreo", "marca",
+              "observaciones"]
+    with _lock, _conn() as conn:
+        rows = conn.execute("SELECT * FROM producto_nuevo ORDER BY creado DESC").fetchall()
+    return [{k: dict(r).get(k) for k in campos} for r in rows]
+
+
+def existe_producto_codigo(codigo: str) -> bool:
+    """True si el código ya existe entre los productos nuevos."""
+    codigo = (codigo or "").strip().upper()
+    with _lock, _conn() as conn:
+        r = conn.execute(
+            "SELECT 1 FROM producto_nuevo WHERE codigo = ?", (codigo,)
+        ).fetchone()
+        return bool(r)
+
+
+def crear_producto(campos: dict) -> str:
+    """Crea un producto nuevo. Genera un código si no viene. Devuelve el código."""
+    codigo = (campos.get("codigo") or "").strip().upper()
+    with _lock, _conn() as conn:
+        if not codigo:
+            n = conn.execute("SELECT COUNT(*) AS c FROM producto_nuevo").fetchone()["c"]
+            codigo = f"NEW-{n + 1:04d}"
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO producto_nuevo
+                (codigo, categoria, nombre, descripcion, material, uso, tallas,
+                 colores, precio_publico, precio_mayoreo, marca, observaciones, creado)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                codigo,
+                campos.get("categoria", "") or "General",
+                campos.get("nombre", ""),
+                campos.get("descripcion", ""),
+                campos.get("material", "") or "—",
+                campos.get("uso", ""),
+                campos.get("tallas", "") or "—",
+                campos.get("colores", "") or "—",
+                int(campos.get("precio_publico") or 0),
+                int(campos.get("precio_mayoreo") or 0),
+                campos.get("marca", "") or "—",
+                campos.get("observaciones", ""),
+                _now(),
+            ),
+        )
+        return codigo
 
 
 # Inicializa la base al importar el modulo.

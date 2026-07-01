@@ -149,7 +149,7 @@ def buscar(query: str = "", categoria: str = "") -> list[dict]:
     overrides = _overrides()
 
     candidatos = []  # (score, indice, producto)
-    for idx, p0 in enumerate(PRODUCTOS):
+    for idx, p0 in enumerate(catalogo_completo()):
         p = _aplicar(p0, overrides)
         if cat and cat not in _norm(p["categoria"]):
             continue
@@ -195,10 +195,28 @@ def _aplicar(p: dict, overrides: dict) -> dict:
     return {**p, **ov} if ov else p
 
 
+def _productos_nuevos() -> list[dict]:
+    """Productos creados desde el dashboard (import perezoso)."""
+    try:
+        from agent import db
+        return db.listar_productos_nuevos()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def catalogo_completo() -> list[dict]:
+    """Catálogo base (65) + productos nuevos creados desde el dashboard."""
+    return PRODUCTOS + _productos_nuevos()
+
+
 def obtener(codigo: str) -> dict | None:
     """Devuelve un producto por su codigo exacto (con ajustes aplicados), o None."""
-    p = PRODUCTOS_POR_CODIGO.get((codigo or "").strip().upper())
-    return _aplicar(p, _overrides()) if p else None
+    codigo = (codigo or "").strip().upper()
+    overrides = _overrides()
+    for p in catalogo_completo():
+        if p["codigo"] == codigo:
+            return _aplicar(p, overrides)
+    return None
 
 
 def precio_de(producto: dict, es_mayorista: bool = False) -> int:

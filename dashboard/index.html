@@ -99,6 +99,18 @@
 
     #btnProductos { border: 0; border-radius: 6px; padding: 7px 12px; font-size: 13px;
       cursor: pointer; color: var(--azul); background: #fff; font-weight: 600; }
+    #btnNuevoProd { border: 1px dashed var(--azul); border-radius: 6px; padding: 6px 12px;
+      font-size: 13px; cursor: pointer; color: var(--azul); background: #fff; }
+    #formNuevoProd { margin: 8px 12px 0; padding: 10px; border: 1px solid var(--borde);
+      border-radius: 8px; background: #f7f9ff; }
+    .fn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .fn-grid .fn-full { grid-column: 1 / -1; }
+    .fn-grid label { font-size: 11px; color: #607d8b; display: block; }
+    .fn-grid input { width: 100%; padding: 7px 9px; border: 1px solid var(--borde);
+      border-radius: 6px; font-size: 13px; }
+    .fn-acciones { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+    .fn-crear { border: 0; border-radius: 6px; padding: 8px 16px; color: #fff;
+      background: var(--azul); cursor: pointer; font-size: 13px; }
     .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45);
       z-index: 50; align-items: center; justify-content: center; }
     .modal.open { display: flex; }
@@ -146,6 +158,22 @@
       <div class="modal-head">
         <strong>Productos y precios (los cambios los usa el bot al instante)</strong>
         <button class="modal-x" onclick="cerrarProductos()">✕</button>
+      </div>
+      <div style="padding:10px 12px 0;">
+        <button id="btnNuevoProd" onclick="toggleNuevoProd()">➕ Nuevo producto</button>
+      </div>
+      <div id="formNuevoProd" style="display:none">
+        <div class="fn-grid">
+          <div><label>Nombre *</label><input id="np_nombre"></div>
+          <div><label>Categoría</label><input id="np_categoria" placeholder="General"></div>
+          <div><label>Precio público</label><input id="np_pub" type="number"></div>
+          <div><label>Precio mayoreo</label><input id="np_may" type="number"></div>
+          <div class="fn-full"><label>Uso / descripción (ayuda al bot a encontrarlo)</label><input id="np_uso"></div>
+        </div>
+        <div class="fn-acciones">
+          <button class="fn-crear" onclick="crearProducto()">Crear producto</button>
+          <span id="np_ok" class="ok"></span>
+        </div>
       </div>
       <input id="prodBuscar" placeholder="Buscar producto por nombre o código…" oninput="cargarProductos()">
       <div id="prodLista" class="prod-lista"></div>
@@ -431,6 +459,37 @@
         </div>`).join("");
     } catch (e) { cont.innerHTML = '<div class="vacio">Error cargando productos.</div>'; }
   }
+  function toggleNuevoProd() {
+    const f = document.getElementById("formNuevoProd");
+    f.style.display = f.style.display === "none" ? "block" : "none";
+  }
+  async function crearProducto() {
+    const nombre = document.getElementById("np_nombre").value.trim();
+    const okSpan = document.getElementById("np_ok");
+    if (!nombre) { okSpan.textContent = "✕ Falta el nombre"; return; }
+    const body = {
+      nombre,
+      categoria: document.getElementById("np_categoria").value.trim() || "General",
+      precio_publico: parseInt(document.getElementById("np_pub").value, 10) || 0,
+      precio_mayoreo: parseInt(document.getElementById("np_may").value, 10) || 0,
+      uso: document.getElementById("np_uso").value.trim(),
+    };
+    okSpan.textContent = "…";
+    try {
+      const r = await fetch("/api/producto/nuevo", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body),
+      }).then(r => r.json());
+      if (r.ok) {
+        okSpan.textContent = "✓ Creado: " + r.codigo;
+        ["np_nombre","np_categoria","np_pub","np_may","np_uso"].forEach(id =>
+          document.getElementById(id).value = "");
+        cargarProductos();
+      } else { okSpan.textContent = "✕ " + (r.error || "error"); }
+    } catch (e) { okSpan.textContent = "✕ error de red"; }
+    setTimeout(() => { okSpan.textContent = ""; }, 4000);
+  }
+
   async function guardarProducto(codigo, btn) {
     const row = btn.closest(".prod-row");
     const pub = parseInt(row.querySelector(".pub").value, 10);
