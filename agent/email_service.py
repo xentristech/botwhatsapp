@@ -166,6 +166,57 @@ async def enviar_cita_email(cita: dict) -> bool:
     return True
 
 
+async def enviar_cancelacion_email(cita: dict) -> bool:
+    """Notifica que una cita con la asesora fue CANCELADA (cliente + PLATIM)."""
+    asesora = cita.get("asesora", "Patricia")
+    fecha_txt = _fecha_legible(cita.get("fecha", ""))
+    hora = cita.get("hora", "")
+    cliente = cita.get("nombre", "Cliente")
+    destino = cita.get("email", "")
+
+    html = f"""\
+<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif;color:#333;background:#f5f5f5;margin:0;">
+  <div style="max-width:600px;margin:0 auto;background:#fff;">
+    <div style="background:#b71c1c;color:#fff;padding:24px;">
+      <h1 style="margin:0;font-size:22px;">PLATIM · Cita cancelada</h1>
+    </div>
+    <div style="padding:24px;">
+      <p>Hola <strong>{cliente}</strong>,</p>
+      <p>Tu cita con la asesora <strong>{asesora}</strong> del
+         <strong>{fecha_txt}</strong> a las <strong>{hora}</strong> quedó
+         <strong>cancelada</strong>.</p>
+      <p style="color:#666;font-size:13px;">Si quieres una nueva cita, escríbenos por WhatsApp cuando gustes.</p>
+    </div>
+    <div style="background:#f5f5f5;padding:16px 24px;color:#999;font-size:12px;">
+      PLATIM · {PLATIM_EMAIL} · Palmira, Valle del Cauca, Colombia.
+    </div>
+  </div>
+</body></html>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"Cita CANCELADA con {asesora} - {fecha_txt} {hora} | PLATIM"
+    msg["From"] = GMAIL_USER
+    msg["To"] = destino or PLATIM_EMAIL
+    if PLATIM_EMAIL:
+        msg["Cc"] = PLATIM_EMAIL
+    msg.attach(MIMEText(html, "html", "utf-8"))
+
+    destinatarios = []
+    if destino:
+        destinatarios.append(destino)
+    if PLATIM_EMAIL:
+        destinatarios.append(PLATIM_EMAIL)
+    if not destinatarios:
+        return False
+
+    await aiosmtplib.send(
+        msg, hostname="smtp.gmail.com", port=587, start_tls=True,
+        username=GMAIL_USER, password=GMAIL_APP_PASSWORD, recipients=destinatarios,
+    )
+    return True
+
+
 async def enviar_cotizacion_email(cot: dict, pdf_bytes: bytes) -> bool:
     """Envia el email con el PDF adjunto al cliente y copia a PLATIM.
     Devuelve True si se envio correctamente."""

@@ -30,7 +30,9 @@ from agent import catalogo
 from agent.db import (
     DB_PATH,
     actualizar_cita_email,
+    cancelar_cita,
     cita_existente,
+    citas_de_cliente,
     crear_cita,
     get_estado_cot,
     guardar_cotizacion,
@@ -685,6 +687,88 @@ async def agendar_cita_asesora(
 
 
 @function_tool
+def mis_citas_asesora(ctx: RunContextWrapper[PlatimContext]) -> str:
+    """Lista las citas activas (no canceladas) del cliente con la asesora.
+    Usar cuando el cliente pregunte qué citas tiene, o antes de cancelar si no
+    se sabe cuál."""
+    jid = ctx.context.jid
+    citas = []
+    for c in citas_de_cliente(jid):
+        try:
+            d = date.fromisoformat(c["fecha"])
+            dia = _fecha_es(d)
+        except ValueError:
+            dia = c["fecha"]
+        citas.append({
+            "cita_id": c["id"],
+            "fecha": c["fecha"],
+            "dia": dia,
+            "hora": c["hora"],
+            "hora_legible": _HORA_LEGIBLE.get(c["hora"], c["hora"]),
+            "asesora": c.get("asesora", ASESORA),
+        })
+    return json.dumps({"total": len(citas), "citas": citas}, ensure_ascii=False)
+
+
+@function_tool
+async def cancelar_cita_asesora(
+    ctx: RunContextWrapper[PlatimContext], cita_id: int = 0
+) -> str:
+    """Cancela una cita del cliente con la asesora (libera el horario y notifica
+    por correo). Si el cliente tiene UNA sola cita, se puede llamar sin cita_id.
+    Si tiene varias, primero muestra sus citas con mis_citas_asesora y pide que
+    indique cuál (usa el cita_id de esa lista)."""
+    jid = ctx.context.jid
+    activas = citas_de_cliente(jid)
+
+    if not activas:
+        return json.dumps({"error": "El cliente no tiene citas activas para cancelar."})
+    if cita_id == 0:
+        if len(activas) == 1:
+            cita_id = activas[0]["id"]
+        else:
+            return json.dumps({
+                "error": "El cliente tiene varias citas. Pídele cuál cancelar.",
+                "citas": [
+                    {"cita_id": c["id"], "fecha": c["fecha"], "hora": c["hora"]}
+                    for c in activas
+                ],
+            })
+
+    cancelada = cancelar_cita(cita_id, jid)
+    if not cancelada:
+        return json.dumps({"error": "No encontré esa cita a nombre del cliente."})
+
+    email_ok = False
+    try:
+        from agent.email_service import enviar_cancelacion_email
+
+        if cancelada.get("email"):
+            email_ok = await enviar_cancelacion_email(cancelada)
+    except Exception as e:  # noqa: BLE001
+        print(f"Error enviando email de cancelación: {e}")
+
+    try:
+        d = date.fromisoformat(cancelada["fecha"])
+        dia = _fecha_es(d)
+    except ValueError:
+        dia = cancelada["fecha"]
+
+    return json.dumps(
+        {
+            "ok": True,
+            "cancelada": True,
+            "cita_id": cita_id,
+            "dia": dia,
+            "hora": cancelada["hora"],
+            "hora_legible": _HORA_LEGIBLE.get(cancelada["hora"], cancelada["hora"]),
+            "email_enviado": email_ok,
+        },
+        ensure_ascii=False,
+    )
+
+
+@function_tool
 def limpiar_cotizacion(ctx: RunContextWrapper[PlatimContext]) -> str:
     """Reinicia la cotizacion actual. Usar si el cliente quiere cambiar
     todo o empezar de nuevo. Conserva los datos de contacto ya registrados."""
@@ -753,7 +837,13 @@ CITAS CON ASESORA (Patricia):
 - Si el cliente da el correo DESPUÉS de agendar, vuelve a llamar
   agendar_cita_asesora con la misma fecha/hora y el correo: el sistema
   reconoce que es su cita y solo le adjunta el correo (no la duplica)
-- Si email_invalido es true, pídele un correo válido; la cita igual queda hecha
+- Si email_invalido is true, pídele un correo válido; la cita igual queda hecha
+- Si el cliente pregunta qué citas tiene, usa mis_citas_asesora
+- Si quiere CANCELAR, usa cancelar_cita_asesora. Si tiene una sola cita puedes
+  cancelar directo; si tiene varias, muéstraselas y pregunta cuál (usa el
+  cita_id). Confírmale la cancelación con la fecha y hora
+- Para REPROGRAMAR: primero cancela con cancelar_cita_asesora y luego agenda la
+  nueva con ver_disponibilidad_asesora + agendar_cita_asesora
 
 CATEGORIAS DEL CATALOGO:
 Uniformes, Buzos/Overoles, Pantalones, Alta visibilidad,
@@ -778,6 +868,8 @@ platim_agent = Agent[PlatimContext](
         generar_y_enviar_cotizacion,
         ver_disponibilidad_asesora,
         agendar_cita_asesora,
+        mis_citas_asesora,
+        cancelar_cita_asesora,
         limpiar_cotizacion,
     ],
 )

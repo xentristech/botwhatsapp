@@ -348,6 +348,33 @@ def actualizar_cita_email(cita_id: int, email: str) -> None:
         )
 
 
+def citas_de_cliente(jid: str) -> list[dict]:
+    """Devuelve las citas activas (no canceladas) de un cliente, ordenadas."""
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM citas WHERE jid = ? AND estado != 'cancelada' "
+            "ORDER BY fecha ASC, hora ASC",
+            (jid,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def cancelar_cita(cita_id: int, jid: str) -> dict | None:
+    """Cancela una cita del cliente (marca estado='cancelada', libera el
+    horario). Devuelve la cita cancelada, o None si no existe o no es suya."""
+    with _lock, _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM citas WHERE id = ? AND jid = ? AND estado != 'cancelada'",
+            (cita_id, jid),
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute(
+            "UPDATE citas SET estado = 'cancelada' WHERE id = ?", (cita_id,)
+        )
+        return dict(row)
+
+
 def listar_citas(limite: int = 100) -> list[dict]:
     with _lock, _conn() as conn:
         rows = conn.execute(
