@@ -29,6 +29,8 @@ from datetime import date, timedelta
 from agent import catalogo
 from agent.db import (
     DB_PATH,
+    actualizar_cita_email,
+    cita_existente,
     crear_cita,
     get_estado_cot,
     guardar_cotizacion,
@@ -611,10 +613,6 @@ async def agendar_cita_asesora(
         return json.dumps({
             "error": "Esa hora de hoy ya pasó. Ofrece un horario futuro."
         })
-    if hora in horas_tomadas(fecha):
-        return json.dumps({
-            "error": "Ese horario ya está ocupado. Ofrece otro de los disponibles."
-        })
     if not nombre:
         return json.dumps({"error": "Falta el nombre del cliente para agendar."})
 
@@ -628,6 +626,42 @@ async def agendar_cita_asesora(
         else:
             email_invalido = True
 
+    from agent.email_service import enviar_cita_email
+
+    # ¿El cliente YA tiene esta misma cita? (no chocar consigo mismo)
+    propia = cita_existente(jid, fecha, hora)
+    if propia is None and hora in horas_tomadas(fecha):
+        return json.dumps({
+            "error": "Ese horario ya está ocupado. Ofrece otro de los disponibles."
+        })
+
+    base_resp = {
+        "ok": True,
+        "asesora": ASESORA,
+        "fecha": fecha,
+        "dia": _fecha_es(d),
+        "hora": hora,
+        "hora_legible": _HORA_LEGIBLE.get(hora, hora),
+        "email_invalido": email_invalido,
+    }
+
+    # Caso: ya estaba agendada -> si ahora dio un correo válido nuevo, se guarda
+    # y se reenvía la confirmación (no se crea otra cita ni se marca "ocupado").
+    if propia is not None:
+        email_ok = False
+        if correo and correo != (propia.get("email") or ""):
+            actualizar_cita_email(propia["id"], correo)
+            try:
+                email_ok = await enviar_cita_email({**propia, "email": correo})
+            except Exception as e:  # noqa: BLE001
+                print(f"Error enviando email de cita: {e}")
+        return json.dumps(
+            {**base_resp, "cita_id": propia["id"], "ya_agendada": True,
+             "email_enviado": email_ok},
+            ensure_ascii=False,
+        )
+
+    # Caso: nueva cita.
     cita = {
         "jid": jid,
         "nombre": nombre,
@@ -638,28 +672,14 @@ async def agendar_cita_asesora(
         "asesora": ASESORA,
     }
     cita_id = crear_cita(cita)
-
-    # Enviar notificación por correo (cliente + PLATIM/Patricia).
     email_ok = False
     try:
-        from agent.email_service import enviar_cita_email
-
         email_ok = await enviar_cita_email(cita)
     except Exception as e:  # noqa: BLE001
         print(f"Error enviando email de cita: {e}")
 
     return json.dumps(
-        {
-            "ok": True,
-            "cita_id": cita_id,
-            "asesora": ASESORA,
-            "fecha": fecha,
-            "dia": _fecha_es(d),
-            "hora": hora,
-            "hora_legible": _HORA_LEGIBLE.get(hora, hora),
-            "email_enviado": email_ok,
-            "email_invalido": email_invalido,
-        },
+        {**base_resp, "cita_id": cita_id, "email_enviado": email_ok},
         ensure_ascii=False,
     )
 
@@ -725,11 +745,15 @@ CITAS CON ASESORA (Patricia):
 - Patricia atiende SOLO de lunes a viernes, de 2:00 a 4:00 PM (hora Colombia)
 - Usa ver_disponibilidad_asesora para mostrar días y horas libres; muestra las
   opciones y deja que el cliente elija una
-- Pide el nombre del cliente (y su email si quiere confirmación por correo)
+- ANTES de agendar, pide el NOMBRE y el CORREO del cliente (el correo es para
+  enviarle la confirmación). Solo agenda cuando ya tengas ambos
 - Usa agendar_cita_asesora con la fecha (YYYY-MM-DD) y hora exactas que elija
 - Al confirmar, dile la fecha y hora en palabras (ej. "martes 8 de julio a las
-  2:30 PM") y que le llegará copia al correo. Si email_invalido es true, pídele
-  un correo válido pero la cita igual queda agendada
+  2:30 PM") y que le llegará copia al correo
+- Si el cliente da el correo DESPUÉS de agendar, vuelve a llamar
+  agendar_cita_asesora con la misma fecha/hora y el correo: el sistema
+  reconoce que es su cita y solo le adjunta el correo (no la duplica)
+- Si email_invalido es true, pídele un correo válido; la cita igual queda hecha
 
 CATEGORIAS DEL CATALOGO:
 Uniformes, Buzos/Overoles, Pantalones, Alta visibilidad,

@@ -328,6 +328,26 @@ def crear_cita(cita: dict) -> int:
         return cur.lastrowid
 
 
+def cita_existente(jid: str, fecha: str, hora: str) -> dict | None:
+    """Devuelve la cita (no cancelada) de ese cliente en esa fecha/hora, o None.
+    Sirve para no chocar con la propia cita del cliente al reintentar."""
+    with _lock, _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM citas WHERE jid = ? AND fecha = ? AND hora = ? "
+            "AND estado != 'cancelada' LIMIT 1",
+            (jid, fecha, hora),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def actualizar_cita_email(cita_id: int, email: str) -> None:
+    """Actualiza el correo de una cita ya creada."""
+    with _lock, _conn() as conn:
+        conn.execute(
+            "UPDATE citas SET email = ? WHERE id = ?", (email, cita_id)
+        )
+
+
 def listar_citas(limite: int = 100) -> list[dict]:
     with _lock, _conn() as conn:
         rows = conn.execute(
