@@ -20,7 +20,7 @@ import os
 from contextlib import suppress
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, File, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -320,8 +320,9 @@ async def api_modo(body: ModoBody):
 
 @app.get("/api/productos")
 async def api_productos(q: str = "", categoria: str = "", limite: int = 60):
-    """Lista productos (con ajustes aplicados) para el editor del dashboard."""
-    prods = catalogo.buscar(q, categoria)[:limite]
+    """Lista productos (con ajustes aplicados) para el editor del dashboard.
+    Incluye los sin stock (para poder marcarlos/reactivarlos)."""
+    prods = catalogo.buscar(q, categoria, incluir_sin_stock=True)[:limite]
     return [
         {
             "codigo": p["codigo"],
@@ -330,9 +331,40 @@ async def api_productos(q: str = "", categoria: str = "", limite: int = 60):
             "precio_publico": p["precio_publico"],
             "precio_mayoreo": p["precio_mayoreo"],
             "observaciones": p.get("observaciones", ""),
+            "sin_stock": bool(p.get("sin_stock")),
         }
         for p in prods
     ]
+
+
+@app.get("/api/productos/export")
+async def api_productos_export():
+    """Descarga el catálogo completo en Excel (.xlsx)."""
+    from agent.excel_service import exportar_xlsx
+
+    data = exportar_xlsx()
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=productos_platim.xlsx"},
+    )
+
+
+@app.post("/api/productos/import")
+async def api_productos_import(archivo: UploadFile = File(...)):
+    """Sube un Excel para crear/actualizar productos en masa."""
+    from agent.excel_service import importar_xlsx
+
+    contenido = await archivo.read()
+    try:
+        resultado = importar_xlsx(contenido)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(
+            {"error": f"No se pudo leer el Excel: {e}"}, status_code=400
+        )
+    if resultado.get("error"):
+        return JSONResponse(resultado, status_code=400)
+    return resultado
 
 
 class ProductoNuevoBody(BaseModel):
@@ -371,6 +403,7 @@ class ProductoBody(BaseModel):
     precio_mayoreo: int | None = None
     nombre: str | None = None
     observaciones: str | None = None
+    sin_stock: bool | None = None
 
 
 @app.post("/api/producto")
@@ -388,6 +421,8 @@ async def api_producto(body: ProductoBody):
         campos["nombre"] = body.nombre.strip()
     if body.observaciones is not None:
         campos["observaciones"] = body.observaciones.strip()
+    if body.sin_stock is not None:
+        campos["sin_stock"] = body.sin_stock
     if not campos:
         return JSONResponse({"error": "Nada para actualizar"}, status_code=400)
     set_override(codigo, campos)

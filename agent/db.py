@@ -105,6 +105,7 @@ def init_db() -> None:
                 precio_mayoreo INTEGER,
                 nombre         TEXT,
                 observaciones  TEXT,
+                sin_stock      INTEGER,
                 actualizado    TEXT
             );
 
@@ -133,6 +134,10 @@ def init_db() -> None:
         ccols = [r["name"] for r in conn.execute("PRAGMA table_info(control_conversacion)")]
         if "etiqueta" not in ccols:
             conn.execute("ALTER TABLE control_conversacion ADD COLUMN etiqueta TEXT DEFAULT ''")
+        # Columna 'sin_stock' en producto_override — migracion suave.
+        ocols = [r["name"] for r in conn.execute("PRAGMA table_info(producto_override)")]
+        if "sin_stock" not in ocols:
+            conn.execute("ALTER TABLE producto_override ADD COLUMN sin_stock INTEGER")
 
 
 # ── LEADS ────────────────────────────────────────────────────────────────
@@ -496,13 +501,16 @@ def get_overrides() -> dict:
 def set_override(codigo: str, campos: dict) -> None:
     """Guarda/actualiza el ajuste de un producto. Solo toca los campos dados."""
     codigo = (codigo or "").strip().upper()
-    permitidos = {"precio_publico", "precio_mayoreo", "nombre", "observaciones"}
+    permitidos = {"precio_publico", "precio_mayoreo", "nombre", "observaciones",
+                  "sin_stock"}
     campos = {k: v for k, v in campos.items() if k in permitidos}
     if not campos:
         return
     for k in ("precio_publico", "precio_mayoreo"):
         if k in campos and campos[k] is not None and campos[k] != "":
             campos[k] = int(campos[k])
+    if "sin_stock" in campos:
+        campos["sin_stock"] = 1 if campos["sin_stock"] else 0
     with _lock, _conn() as conn:
         existe = conn.execute(
             "SELECT 1 FROM producto_override WHERE codigo = ?", (codigo,)

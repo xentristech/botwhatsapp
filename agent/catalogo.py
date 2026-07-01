@@ -136,14 +136,16 @@ def _token_en(tok: str, blob: str) -> bool:
     return False
 
 
-def buscar(query: str = "", categoria: str = "") -> list[dict]:
+def buscar(query: str = "", categoria: str = "",
+           incluir_sin_stock: bool = False) -> list[dict]:
     """Busca productos por texto libre (nombre, descripcion, uso, codigo, marca)
     y/o por categoria.
 
     El query se divide en tokens (ignora acentos y palabras vacias como 'de',
     'para', 'con'). Cada producto recibe una puntuacion = numero de tokens que
     coinciden (tolerando plural/singular). Se devuelven los productos con mejor
-    coincidencia, ordenados por relevancia."""
+    coincidencia, ordenados por relevancia. Los productos marcados 'sin_stock'
+    se excluyen (para que el bot no los ofrezca) salvo incluir_sin_stock=True."""
     tokens = [t for t in _norm(query).split() if t and t not in _STOPWORDS]
     cat = _norm(categoria)
     overrides = _overrides()
@@ -151,6 +153,8 @@ def buscar(query: str = "", categoria: str = "") -> list[dict]:
     candidatos = []  # (score, indice, producto)
     for idx, p0 in enumerate(catalogo_completo()):
         p = _aplicar(p0, overrides)
+        if not incluir_sin_stock and p.get("sin_stock"):
+            continue
         if cat and cat not in _norm(p["categoria"]):
             continue
         if not tokens:

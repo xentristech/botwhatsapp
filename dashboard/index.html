@@ -99,8 +99,9 @@
 
     #btnProductos { border: 0; border-radius: 6px; padding: 7px 12px; font-size: 13px;
       cursor: pointer; color: var(--azul); background: #fff; font-weight: 600; }
-    #btnNuevoProd { border: 1px dashed var(--azul); border-radius: 6px; padding: 6px 12px;
-      font-size: 13px; cursor: pointer; color: var(--azul); background: #fff; }
+    #btnNuevoProd, #btnExport, #btnImport { border: 1px dashed var(--azul);
+      border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer;
+      color: var(--azul); background: #fff; }
     #formNuevoProd { margin: 8px 12px 0; padding: 10px; border: 1px solid var(--borde);
       border-radius: 8px; background: #f7f9ff; }
     .fn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -159,8 +160,12 @@
         <strong>Productos y precios (los cambios los usa el bot al instante)</strong>
         <button class="modal-x" onclick="cerrarProductos()">✕</button>
       </div>
-      <div style="padding:10px 12px 0;">
+      <div style="padding:10px 12px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
         <button id="btnNuevoProd" onclick="toggleNuevoProd()">➕ Nuevo producto</button>
+        <button id="btnExport" onclick="descargarExcel()">⬇ Descargar Excel</button>
+        <button id="btnImport" onclick="document.getElementById('fileExcel').click()">⬆ Subir Excel</button>
+        <input id="fileExcel" type="file" accept=".xlsx" style="display:none" onchange="subirExcel(this)">
+        <span id="impMsg" class="ok"></span>
       </div>
       <div id="formNuevoProd" style="display:none">
         <div class="fn-grid">
@@ -446,13 +451,15 @@
       if (!prods.length) { cont.innerHTML = '<div class="vacio">Sin resultados.</div>'; return; }
       cont.innerHTML = prods.map(p => `
         <div class="prod-row" data-cod="${esc(p.codigo)}">
-          <div class="pcab"><span><b>${esc(p.nombre)}</b> · ${esc(p.categoria)}</span>
+          <div class="pcab"><span><b>${esc(p.nombre)}</b> · ${esc(p.categoria)}${p.sin_stock ? ' <span class="chip" style="background:#c62828">SIN STOCK</span>' : ''}</span>
             <span class="pcod">${esc(p.codigo)}</span></div>
           <div class="pinputs">
             <div><label>Precio público</label>
               <input class="precio pub" type="number" value="${p.precio_publico}"></div>
             <div><label>Precio mayoreo</label>
               <input class="precio may" type="number" value="${p.precio_mayoreo}"></div>
+            <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#c62828;">
+              <input type="checkbox" class="stock" ${p.sin_stock ? "checked" : ""}> Sin stock</label>
             <button onclick="guardarProducto('${esc(p.codigo)}', this)">Guardar</button>
             <span class="ok"></span>
           </div>
@@ -494,16 +501,38 @@
     const row = btn.closest(".prod-row");
     const pub = parseInt(row.querySelector(".pub").value, 10);
     const may = parseInt(row.querySelector(".may").value, 10);
+    const sin = row.querySelector(".stock").checked;
     const okSpan = row.querySelector(".ok");
     okSpan.textContent = "…";
     try {
       const r = await fetch("/api/producto", {
         method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ codigo, precio_publico: pub, precio_mayoreo: may }),
+        body: JSON.stringify({ codigo, precio_publico: pub, precio_mayoreo: may, sin_stock: sin }),
       }).then(r => r.json());
       okSpan.textContent = r.ok ? "✓ Guardado" : ("✕ " + (r.error || ""));
+      if (r.ok) cargarProductos();
     } catch (e) { okSpan.textContent = "✕ error"; }
     setTimeout(() => { okSpan.textContent = ""; }, 2500);
+  }
+
+  function descargarExcel() { window.location.href = "/api/productos/export"; }
+
+  async function subirExcel(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const msg = document.getElementById("impMsg");
+    msg.textContent = "Subiendo…";
+    const fd = new FormData();
+    fd.append("archivo", file);
+    try {
+      const r = await fetch("/api/productos/import", { method: "POST", body: fd }).then(r => r.json());
+      if (r.ok) {
+        msg.textContent = `✓ ${r.creados} creados, ${r.actualizados} actualizados`;
+        cargarProductos();
+      } else { msg.textContent = "✕ " + (r.error || "error"); }
+    } catch (e) { msg.textContent = "✕ error de red"; }
+    input.value = "";
+    setTimeout(() => { msg.textContent = ""; }, 6000);
   }
 
   cargarTablas();
