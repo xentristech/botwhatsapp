@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PLATIM Agent · Dashboard</title>
+  <style>
+    :root {
+      --azul: #1a237e;
+      --azul-claro: #e8eaf6;
+      --gris: #f5f5f5;
+      --texto: #263238;
+      --in: #e3f2fd;
+      --out: #e8f5e9;
+      --borde: #e0e0e0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      background: var(--gris); color: var(--texto);
+      display: flex; flex-direction: column; height: 100vh;
+    }
+    header {
+      background: var(--azul); color: #fff; padding: 12px 20px;
+      display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto;
+    }
+    header h1 { font-size: 18px; }
+    header .sub { color: #90caf9; font-size: 12px; }
+    #estado { font-size: 12px; display: flex; align-items: center; gap: 6px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #f44336; }
+    .dot.on { background: #4caf50; }
+
+    .stats { display: flex; gap: 12px; padding: 10px 20px; flex: 0 0 auto; }
+    .card {
+      background: #fff; border-radius: 8px; padding: 8px 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    }
+    .card .num { font-size: 20px; font-weight: 700; color: var(--azul); }
+    .card .lbl { font-size: 11px; color: #607d8b; }
+
+    .main { flex: 1 1 auto; display: grid; grid-template-columns: 280px 1fr 320px;
+            gap: 12px; padding: 0 20px 16px; min-height: 0; }
+    @media (max-width: 1000px) { .main { grid-template-columns: 1fr; grid-auto-rows: minmax(200px, auto); } }
+
+    .panel {
+      background: #fff; border-radius: 8px; overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08); display: flex; flex-direction: column; min-height: 0;
+    }
+    .panel h2 {
+      background: var(--azul-claro); color: var(--azul);
+      padding: 10px 14px; font-size: 14px; flex: 0 0 auto;
+    }
+    .panel .body { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+
+    /* Lista de conversaciones */
+    .conv {
+      padding: 10px 14px; border-bottom: 1px solid var(--borde); cursor: pointer;
+    }
+    .conv:hover { background: #fafafa; }
+    .conv.sel { background: var(--azul-claro); border-left: 3px solid var(--azul); }
+    .conv .top { display: flex; justify-content: space-between; align-items: baseline; }
+    .conv .nom { font-weight: 600; font-size: 14px; }
+    .conv .cnt { font-size: 11px; color: #90a4ae; }
+    .conv .jid { font-size: 11px; color: #90a4ae; }
+    .conv .last { font-size: 12px; color: #607d8b; margin-top: 2px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* Chat */
+    #chatHead { padding: 10px 14px; font-size: 14px; }
+    .msg { padding: 6px 14px; }
+    .msg .bubble {
+      display: inline-block; max-width: 88%; padding: 8px 12px;
+      border-radius: 10px; font-size: 13px; white-space: pre-wrap; word-break: break-word;
+    }
+    .msg.in  .bubble { background: var(--in); }
+    .msg.out { text-align: right; }
+    .msg.out .bubble { background: var(--out); text-align: left; }
+    .msg .meta { font-size: 10px; color: #b0bec5; margin-top: 2px; }
+    .vacio { padding: 24px 14px; color: #90a4ae; font-size: 13px; text-align: center; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid #eee; }
+    th { color: #607d8b; font-weight: 600; }
+    .total { font-weight: 700; color: var(--azul); }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>PLATIM Agent</h1>
+      <div class="sub">Dashboard · conversaciones e historial</div>
+    </div>
+    <div id="estado"><span class="dot" id="dot"></span><span id="estadoTxt">Conectando…</span></div>
+  </header>
+
+  <div class="stats">
+    <div class="card"><div class="num" id="nLeads">0</div><div class="lbl">Leads</div></div>
+    <div class="card"><div class="num" id="nCotiz">0</div><div class="lbl">Cotizaciones</div></div>
+    <div class="card"><div class="num" id="nConv">0</div><div class="lbl">Conversaciones</div></div>
+  </div>
+
+  <div class="main">
+    <div class="panel">
+      <h2>Conversaciones</h2>
+      <div class="body" id="convList"></div>
+    </div>
+
+    <div class="panel">
+      <h2 id="chatHead">Selecciona una conversación</h2>
+      <div class="body" id="chat"><div class="vacio">Elige una conversación de la izquierda para ver el historial completo.</div></div>
+    </div>
+
+    <div class="panel">
+      <h2>Cotizaciones</h2>
+      <div class="body">
+        <table>
+          <thead><tr><th>Código</th><th>Cliente</th><th>Total</th></tr></thead>
+          <tbody id="cotizBody"></tbody>
+        </table>
+        <h2 style="margin-top:4px;">Citas · Patricia</h2>
+        <table>
+          <thead><tr><th>Cliente</th><th>Fecha</th><th>Hora</th></tr></thead>
+          <tbody id="citasBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const fmtCOP = n => "$" + Number(n || 0).toLocaleString("es-CO");
+  let selJid = null;
+  let convCache = [];
+
+  const esc = s => (s || "").replace(/[&<>"']/g, c =>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+  function nombreDe(jid) {
+    const c = convCache.find(x => x.jid === jid);
+    return (c && c.nombre) ? c.nombre : jid;
+  }
+
+  function renderConversaciones(convs) {
+    convCache = convs;
+    document.getElementById("nConv").textContent = convs.length;
+    const cont = document.getElementById("convList");
+    cont.innerHTML = convs.map(c => `
+      <div class="conv ${c.jid === selJid ? "sel" : ""}" data-jid="${esc(c.jid)}">
+        <div class="top">
+          <span class="nom">${esc(c.nombre || "Sin nombre")}</span>
+          <span class="cnt">${c.n_mensajes} msj</span>
+        </div>
+        <div class="jid">${esc(c.jid)}${c.empresa ? " · " + esc(c.empresa) : ""}</div>
+        <div class="last">${esc(c.ultimo_texto || "")}</div>
+      </div>`).join("");
+    cont.querySelectorAll(".conv").forEach(el =>
+      el.addEventListener("click", () => abrirConversacion(el.dataset.jid)));
+  }
+
+  function bubble(dir, texto, ts) {
+    const hora = ts ? new Date(ts).toLocaleString("es-CO", {hour12:false}) : "";
+    return `<div class="msg ${dir}"><div class="bubble">${esc(texto)}</div>
+            <div class="meta">${dir === "in" ? "Cliente" : "Bot"} · ${hora}</div></div>`;
+  }
+
+  async function abrirConversacion(jid) {
+    selJid = jid;
+    document.querySelectorAll(".conv").forEach(el =>
+      el.classList.toggle("sel", el.dataset.jid === jid));
+    document.getElementById("chatHead").textContent = nombreDe(jid) + " · " + jid;
+    const chat = document.getElementById("chat");
+    chat.innerHTML = '<div class="vacio">Cargando historial…</div>';
+    try {
+      const msgs = await fetch(`/api/mensajes?jid=${encodeURIComponent(jid)}&limite=500`).then(r => r.json());
+      chat.innerHTML = msgs.length
+        ? msgs.map(m => bubble(m.direccion, m.texto, m.ts)).join("")
+        : '<div class="vacio">Sin mensajes.</div>';
+      chat.scrollTop = chat.scrollHeight;
+    } catch (e) { chat.innerHTML = '<div class="vacio">Error cargando historial.</div>'; }
+  }
+
+  async function cargarTablas() {
+    try {
+      const [leads, cotiz, convs, citas] = await Promise.all([
+        fetch("/api/leads").then(r => r.json()),
+        fetch("/api/cotizaciones").then(r => r.json()),
+        fetch("/api/conversaciones").then(r => r.json()),
+        fetch("/api/citas").then(r => r.json()),
+      ]);
+      document.getElementById("nLeads").textContent = leads.length;
+      document.getElementById("nCotiz").textContent = cotiz.length;
+      renderConversaciones(convs);
+      document.getElementById("cotizBody").innerHTML = cotiz.map(c => `
+        <tr><td>${c.codigo}</td><td>${esc(c.nombre || "—")}</td>
+        <td class="total">${fmtCOP(c.total)}</td></tr>`).join("");
+      document.getElementById("citasBody").innerHTML = citas.length
+        ? citas.map(c => `
+          <tr><td>${esc(c.nombre || "—")}</td><td>${c.fecha}</td>
+          <td>${c.hora}</td></tr>`).join("")
+        : '<tr><td colspan="3" style="color:#90a4ae;">Sin citas</td></tr>';
+    } catch (e) { console.error(e); }
+  }
+
+  function appendSiActiva(jid, dir, texto) {
+    if (jid !== selJid) return;
+    const chat = document.getElementById("chat");
+    if (chat.querySelector(".vacio")) chat.innerHTML = "";
+    chat.insertAdjacentHTML("beforeend", bubble(dir, texto, new Date().toISOString()));
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function conectarSSE() {
+    const es = new EventSource("/api/stream");
+    const dot = document.getElementById("dot");
+    const txt = document.getElementById("estadoTxt");
+    es.onopen = () => { dot.classList.add("on"); txt.textContent = "En línea"; };
+    es.onerror = () => { dot.classList.remove("on"); txt.textContent = "Reconectando…"; };
+    es.addEventListener("mensaje_in", e => {
+      const d = JSON.parse(e.data); appendSiActiva(d.jid, "in", d.texto); cargarTablas();
+    });
+    es.addEventListener("mensaje_out", e => {
+      const d = JSON.parse(e.data); appendSiActiva(d.jid, "out", d.texto); cargarTablas();
+    });
+    es.addEventListener("ping", () => {});
+  }
+
+  cargarTablas();
+  conectarSSE();
+  setInterval(cargarTablas, 20000);
+</script>
+</body>
+</html>

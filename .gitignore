@@ -1,0 +1,32 @@
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Variables de entorno (NUNCA subir al repo)
+.env
+
+# Base de datos local (incluye sidecars WAL/SHM de SQLite)
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/*.db-shm
+data/*.db-wal
+*.db-shm
+*.db-wal
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# PDFs generados / temporales
+*.pdf
+
+# Sistema
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
