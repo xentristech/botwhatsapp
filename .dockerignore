@@ -1,0 +1,15 @@
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.git/
+.gitignore
+.env
+.env.example
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.sqlite*
+*.pdf
+iniciar.ps1
+README.md
