@@ -67,7 +67,16 @@
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
     /* Chat */
-    #chatHead { padding: 10px 14px; font-size: 14px; }
+    #chatHead { padding: 10px 14px; font-size: 14px; display: flex;
+      align-items: center; justify-content: space-between; gap: 8px; }
+    .btn-modo { border: 0; border-radius: 6px; padding: 5px 10px; font-size: 12px;
+      cursor: pointer; color: #fff; background: #ef6c00; white-space: nowrap; }
+    .btn-modo.bot-activo { background: #2e7d32; }
+    #chatAcciones { display: flex; gap: 8px; align-items: center; }
+    #selEtiqueta { border: 1px solid var(--borde); border-radius: 6px; padding: 5px 8px;
+      font-size: 12px; cursor: pointer; background: #fff; }
+    .chip { display: inline-block; font-size: 10px; font-weight: 600; color: #fff;
+      padding: 1px 7px; border-radius: 10px; margin-left: 4px; vertical-align: middle; }
     .msg { padding: 6px 14px; }
     .msg .bubble {
       display: inline-block; max-width: 88%; padding: 8px 12px;
@@ -76,8 +85,43 @@
     .msg.in  .bubble { background: var(--in); }
     .msg.out { text-align: right; }
     .msg.out .bubble { background: var(--out); text-align: left; }
+    .msg.humano .bubble { background: #fff3e0; border: 1px solid #ffcc80; }
     .msg .meta { font-size: 10px; color: #b0bec5; margin-top: 2px; }
+
+    #composer { flex: 0 0 auto; display: flex; gap: 6px; padding: 8px;
+      border-top: 1px solid var(--borde); background: #fafafa; }
+    #composer input { flex: 1 1 auto; padding: 8px 10px; border: 1px solid var(--borde);
+      border-radius: 8px; font-size: 13px; }
+    #composer button { border: 0; border-radius: 8px; padding: 8px 14px; color: #fff;
+      background: var(--azul); cursor: pointer; font-size: 13px; }
+    #composer input:disabled, #composer button:disabled { opacity: .5; cursor: not-allowed; }
     .vacio { padding: 24px 14px; color: #90a4ae; font-size: 13px; text-align: center; }
+
+    #btnProductos { border: 0; border-radius: 6px; padding: 7px 12px; font-size: 13px;
+      cursor: pointer; color: var(--azul); background: #fff; font-weight: 600; }
+    .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45);
+      z-index: 50; align-items: center; justify-content: center; }
+    .modal.open { display: flex; }
+    .modal-box { background: #fff; width: min(680px, 94vw); max-height: 86vh;
+      border-radius: 10px; display: flex; flex-direction: column; overflow: hidden; }
+    .modal-head { background: var(--azul); color: #fff; padding: 12px 16px;
+      display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+    .modal-x { background: transparent; border: 0; color: #fff; font-size: 18px; cursor: pointer; }
+    #prodBuscar { margin: 12px; padding: 9px 12px; border: 1px solid var(--borde);
+      border-radius: 8px; font-size: 14px; }
+    .prod-lista { overflow-y: auto; padding: 0 12px 12px; }
+    .prod-row { border: 1px solid var(--borde); border-radius: 8px; padding: 10px 12px;
+      margin-bottom: 8px; }
+    .prod-row .pcab { display: flex; justify-content: space-between; font-size: 13px; }
+    .prod-row .pcod { color: #90a4ae; font-size: 11px; }
+    .prod-row .pinputs { display: flex; gap: 10px; align-items: flex-end; margin-top: 8px;
+      flex-wrap: wrap; }
+    .prod-row label { font-size: 11px; color: #607d8b; display: block; }
+    .prod-row input.precio { width: 120px; padding: 6px 8px; border: 1px solid var(--borde);
+      border-radius: 6px; font-size: 13px; }
+    .prod-row button { border: 0; border-radius: 6px; padding: 7px 14px; color: #fff;
+      background: #2e7d32; cursor: pointer; font-size: 13px; }
+    .prod-row .ok { color: #2e7d32; font-size: 12px; margin-left: 8px; }
 
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid #eee; }
@@ -91,8 +135,22 @@
       <h1>PLATIM Agent</h1>
       <div class="sub">Dashboard · conversaciones e historial</div>
     </div>
-    <div id="estado"><span class="dot" id="dot"></span><span id="estadoTxt">Conectando…</span></div>
+    <div style="display:flex;align-items:center;gap:16px;">
+      <button id="btnProductos" onclick="abrirProductos()">🏷️ Productos / Precios</button>
+      <div id="estado"><span class="dot" id="dot"></span><span id="estadoTxt">Conectando…</span></div>
+    </div>
   </header>
+
+  <div id="modalProductos" class="modal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <strong>Productos y precios (los cambios los usa el bot al instante)</strong>
+        <button class="modal-x" onclick="cerrarProductos()">✕</button>
+      </div>
+      <input id="prodBuscar" placeholder="Buscar producto por nombre o código…" oninput="cargarProductos()">
+      <div id="prodLista" class="prod-lista"></div>
+    </div>
+  </div>
 
   <div class="stats">
     <div class="card"><div class="num" id="nLeads">0</div><div class="lbl">Leads</div></div>
@@ -107,8 +165,26 @@
     </div>
 
     <div class="panel">
-      <h2 id="chatHead">Selecciona una conversación</h2>
+      <h2 id="chatHead">
+        <span id="chatTitulo">Selecciona una conversación</span>
+        <span id="chatAcciones">
+          <select id="selEtiqueta" style="display:none" onchange="cambiarEtiqueta()">
+            <option value="">Sin estado</option>
+            <option value="Interesado">Interesado</option>
+            <option value="Cotizó">Cotizó</option>
+            <option value="Compró">Compró ✅</option>
+            <option value="No compró">No compró ❌</option>
+            <option value="Seguimiento">Seguimiento</option>
+          </select>
+          <button id="btnModo" class="btn-modo" style="display:none" onclick="toggleModo()">Pausar bot</button>
+        </span>
+      </h2>
       <div class="body" id="chat"><div class="vacio">Elige una conversación de la izquierda para ver el historial completo.</div></div>
+      <div id="composer">
+        <input id="msgInput" type="text" placeholder="Escribe como agente humano…"
+               onkeydown="if(event.key==='Enter')enviarHumano()" disabled>
+        <button id="btnEnviar" onclick="enviarHumano()" disabled>Enviar</button>
+      </div>
     </div>
 
     <div class="panel">
@@ -140,6 +216,20 @@
     return (c && c.nombre) ? c.nombre : jid;
   }
 
+  const COLOR_ETIQUETA = {
+    "Interesado": "#1976d2", "Cotizó": "#ef6c00", "Compró": "#2e7d32",
+    "No compró": "#c62828", "Seguimiento": "#6a1b9a"
+  };
+  function etiquetaDe(jid) {
+    const c = convCache.find(x => x.jid === jid);
+    return (c && c.etiqueta) ? c.etiqueta : "";
+  }
+  function chipHTML(etiqueta) {
+    if (!etiqueta) return "";
+    const color = COLOR_ETIQUETA[etiqueta] || "#607d8b";
+    return `<span class="chip" style="background:${color}">${esc(etiqueta)}</span>`;
+  }
+
   function renderConversaciones(convs) {
     convCache = convs;
     document.getElementById("nConv").textContent = convs.length;
@@ -147,7 +237,7 @@
     cont.innerHTML = convs.map(c => `
       <div class="conv ${c.jid === selJid ? "sel" : ""}" data-jid="${esc(c.jid)}">
         <div class="top">
-          <span class="nom">${esc(c.nombre || "Sin nombre")}</span>
+          <span class="nom">${esc(c.nombre || "Sin nombre")}${chipHTML(c.etiqueta)}${c.humano ? ' <span style="color:#ef6c00;font-size:11px;">👤</span>' : ''}</span>
           <span class="cnt">${c.n_mensajes} msj</span>
         </div>
         <div class="jid">${esc(c.jid)}${c.empresa ? " · " + esc(c.empresa) : ""}</div>
@@ -155,28 +245,101 @@
       </div>`).join("");
     cont.querySelectorAll(".conv").forEach(el =>
       el.addEventListener("click", () => abrirConversacion(el.dataset.jid)));
+    if (selJid) actualizarBotonModo();
   }
 
-  function bubble(dir, texto, ts) {
+  function bubble(dir, texto, ts, origen) {
     const hora = ts ? new Date(ts).toLocaleString("es-CO", {hour12:false}) : "";
-    return `<div class="msg ${dir}"><div class="bubble">${esc(texto)}</div>
-            <div class="meta">${dir === "in" ? "Cliente" : "Bot"} · ${hora}</div></div>`;
+    const esHumano = origen === "humano";
+    const cls = dir === "in" ? "in" : (esHumano ? "out humano" : "out");
+    const quien = dir === "in" ? "Cliente" : (esHumano ? "Agente 👤" : "Bot 🤖");
+    return `<div class="msg ${cls}"><div class="bubble">${esc(texto)}</div>
+            <div class="meta">${quien} · ${hora}</div></div>`;
+  }
+
+  function esHumanoDe(jid) {
+    const c = convCache.find(x => x.jid === jid);
+    return !!(c && c.humano);
+  }
+
+  function actualizarBotonModo() {
+    const btn = document.getElementById("btnModo");
+    if (!selJid) { btn.style.display = "none"; return; }
+    btn.style.display = "inline-block";
+    if (esHumanoDe(selJid)) {
+      btn.textContent = "▶ Reactivar bot";
+      btn.classList.add("bot-activo");
+    } else {
+      btn.textContent = "⏸ Pausar bot (tomar control)";
+      btn.classList.remove("bot-activo");
+    }
+    const on = !!selJid;
+    document.getElementById("msgInput").disabled = !on;
+    document.getElementById("btnEnviar").disabled = !on;
+    const sel = document.getElementById("selEtiqueta");
+    sel.style.display = on ? "inline-block" : "none";
+    if (on) sel.value = etiquetaDe(selJid);
+  }
+
+  async function cambiarEtiqueta() {
+    if (!selJid) return;
+    const etiqueta = document.getElementById("selEtiqueta").value;
+    await fetch("/api/etiqueta", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ jid: selJid, etiqueta }),
+    });
+    const c = convCache.find(x => x.jid === selJid);
+    if (c) c.etiqueta = etiqueta;
+    cargarTablas();
   }
 
   async function abrirConversacion(jid) {
     selJid = jid;
     document.querySelectorAll(".conv").forEach(el =>
       el.classList.toggle("sel", el.dataset.jid === jid));
-    document.getElementById("chatHead").textContent = nombreDe(jid) + " · " + jid;
+    document.getElementById("chatTitulo").textContent = nombreDe(jid) + " · " + jid;
+    actualizarBotonModo();
     const chat = document.getElementById("chat");
     chat.innerHTML = '<div class="vacio">Cargando historial…</div>';
     try {
       const msgs = await fetch(`/api/mensajes?jid=${encodeURIComponent(jid)}&limite=500`).then(r => r.json());
       chat.innerHTML = msgs.length
-        ? msgs.map(m => bubble(m.direccion, m.texto, m.ts)).join("")
+        ? msgs.map(m => bubble(m.direccion, m.texto, m.ts, m.origen)).join("")
         : '<div class="vacio">Sin mensajes.</div>';
       chat.scrollTop = chat.scrollHeight;
     } catch (e) { chat.innerHTML = '<div class="vacio">Error cargando historial.</div>'; }
+  }
+
+  async function enviarHumano() {
+    const input = document.getElementById("msgInput");
+    const texto = input.value.trim();
+    if (!selJid || !texto) return;
+    input.value = "";
+    try {
+      const r = await fetch("/api/enviar", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ jid: selJid, texto }),
+      }).then(r => r.json());
+      if (r.error) { alert("No se pudo enviar: " + r.error); return; }
+      const chat = document.getElementById("chat");
+      if (chat.querySelector(".vacio")) chat.innerHTML = "";
+      chat.insertAdjacentHTML("beforeend", bubble("out", texto, new Date().toISOString(), "humano"));
+      chat.scrollTop = chat.scrollHeight;
+      cargarTablas();  // refresca el estado (ahora en modo humano)
+    } catch (e) { alert("Error de red al enviar."); }
+  }
+
+  async function toggleModo() {
+    if (!selJid) return;
+    const nuevoHumano = !esHumanoDe(selJid);
+    await fetch("/api/modo", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ jid: selJid, humano: nuevoHumano }),
+    });
+    const c = convCache.find(x => x.jid === selJid);
+    if (c) c.humano = nuevoHumano ? 1 : 0;
+    actualizarBotonModo();
+    cargarTablas();
   }
 
   async function cargarTablas() {
@@ -201,11 +364,11 @@
     } catch (e) { console.error(e); }
   }
 
-  function appendSiActiva(jid, dir, texto) {
+  function appendSiActiva(jid, dir, texto, origen) {
     if (jid !== selJid) return;
     const chat = document.getElementById("chat");
     if (chat.querySelector(".vacio")) chat.innerHTML = "";
-    chat.insertAdjacentHTML("beforeend", bubble(dir, texto, new Date().toISOString()));
+    chat.insertAdjacentHTML("beforeend", bubble(dir, texto, new Date().toISOString(), origen));
     chat.scrollTop = chat.scrollHeight;
   }
 
@@ -219,9 +382,69 @@
       const d = JSON.parse(e.data); appendSiActiva(d.jid, "in", d.texto); cargarTablas();
     });
     es.addEventListener("mensaje_out", e => {
-      const d = JSON.parse(e.data); appendSiActiva(d.jid, "out", d.texto); cargarTablas();
+      const d = JSON.parse(e.data);
+      // Evita duplicar el mensaje que este mismo dashboard acaba de enviar.
+      if (d.origen === "humano" && d.jid === selJid) { cargarTablas(); return; }
+      appendSiActiva(d.jid, "out", d.texto, d.origen); cargarTablas();
+    });
+    es.addEventListener("modo", e => {
+      const d = JSON.parse(e.data);
+      const c = convCache.find(x => x.jid === d.jid);
+      if (c) c.humano = d.humano ? 1 : 0;
+      if (d.jid === selJid) actualizarBotonModo();
+    });
+    es.addEventListener("etiqueta", e => {
+      const d = JSON.parse(e.data);
+      const c = convCache.find(x => x.jid === d.jid);
+      if (c) c.etiqueta = d.etiqueta;
+      if (d.jid === selJid) document.getElementById("selEtiqueta").value = d.etiqueta || "";
     });
     es.addEventListener("ping", () => {});
+  }
+
+  function abrirProductos() {
+    document.getElementById("modalProductos").classList.add("open");
+    cargarProductos();
+  }
+  function cerrarProductos() {
+    document.getElementById("modalProductos").classList.remove("open");
+  }
+  async function cargarProductos() {
+    const q = document.getElementById("prodBuscar").value.trim();
+    const cont = document.getElementById("prodLista");
+    cont.innerHTML = '<div class="vacio">Cargando…</div>';
+    try {
+      const prods = await fetch(`/api/productos?q=${encodeURIComponent(q)}&limite=80`).then(r => r.json());
+      if (!prods.length) { cont.innerHTML = '<div class="vacio">Sin resultados.</div>'; return; }
+      cont.innerHTML = prods.map(p => `
+        <div class="prod-row" data-cod="${esc(p.codigo)}">
+          <div class="pcab"><span><b>${esc(p.nombre)}</b> · ${esc(p.categoria)}</span>
+            <span class="pcod">${esc(p.codigo)}</span></div>
+          <div class="pinputs">
+            <div><label>Precio público</label>
+              <input class="precio pub" type="number" value="${p.precio_publico}"></div>
+            <div><label>Precio mayoreo</label>
+              <input class="precio may" type="number" value="${p.precio_mayoreo}"></div>
+            <button onclick="guardarProducto('${esc(p.codigo)}', this)">Guardar</button>
+            <span class="ok"></span>
+          </div>
+        </div>`).join("");
+    } catch (e) { cont.innerHTML = '<div class="vacio">Error cargando productos.</div>'; }
+  }
+  async function guardarProducto(codigo, btn) {
+    const row = btn.closest(".prod-row");
+    const pub = parseInt(row.querySelector(".pub").value, 10);
+    const may = parseInt(row.querySelector(".may").value, 10);
+    const okSpan = row.querySelector(".ok");
+    okSpan.textContent = "…";
+    try {
+      const r = await fetch("/api/producto", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ codigo, precio_publico: pub, precio_mayoreo: may }),
+      }).then(r => r.json());
+      okSpan.textContent = r.ok ? "✓ Guardado" : ("✕ " + (r.error || ""));
+    } catch (e) { okSpan.textContent = "✕ error"; }
+    setTimeout(() => { okSpan.textContent = ""; }, 2500);
   }
 
   cargarTablas();

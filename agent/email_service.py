@@ -19,7 +19,47 @@ load_dotenv()
 
 GMAIL_USER = os.getenv("GMAIL_USER", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "")
+
+# SMTP configurable. Por defecto usa Gmail (compatibilidad). Para enviar DESDE el
+# dominio propio (ventas@platim.co), define en el .env:
+#   SMTP_HOST=smtp.hostinger.com  SMTP_PORT=465
+#   SMTP_USER=ventas@platim.co    SMTP_PASSWORD=...   EMAIL_FROM=ventas@platim.co
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER") or GMAIL_USER
+SMTP_PASSWORD = (os.getenv("SMTP_PASSWORD") or GMAIL_APP_PASSWORD).replace(" ", "")
+EMAIL_FROM = os.getenv("EMAIL_FROM") or SMTP_USER
+
 PLATIM_EMAIL = os.getenv("PLATIM_EMAIL", "")
+
+
+async def _enviar_mensaje(msg, recipients: list[str]) -> None:
+    """Envia el mensaje por el SMTP configurado (465=SSL, 587=STARTTLS)."""
+    kwargs = dict(
+        hostname=SMTP_HOST, port=SMTP_PORT,
+        username=SMTP_USER, password=SMTP_PASSWORD, recipients=recipients,
+    )
+    if SMTP_PORT == 465:
+        kwargs["use_tls"] = True
+    else:
+        kwargs["start_tls"] = True
+    await aiosmtplib.send(msg, **kwargs)
+# Correos internos que reciben copia de cada cotizacion (separados por coma).
+# Por defecto incluye info@platim.co ademas de PLATIM_EMAIL (ventas).
+PLATIM_EMAIL_COPIA = os.getenv("PLATIM_EMAIL_COPIA", "info@platim.co")
+
+
+def _copias_internas() -> list[str]:
+    """Lista de correos internos (ventas + copias) sin duplicados ni vacios."""
+    correos = [PLATIM_EMAIL] + [
+        c.strip() for c in PLATIM_EMAIL_COPIA.split(",") if c.strip()
+    ]
+    vistos, salida = set(), []
+    for c in correos:
+        if c and c not in vistos:
+            vistos.add(c)
+            salida.append(c)
+    return salida
 
 
 def _moneda(valor) -> str:
@@ -145,7 +185,7 @@ async def enviar_cita_email(cita: dict) -> bool:
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"Cita con {asesora} - {fecha_txt} {hora} | PLATIM"
-    msg["From"] = GMAIL_USER
+    msg["From"] = EMAIL_FROM
     msg["To"] = destino or PLATIM_EMAIL
     if PLATIM_EMAIL:
         msg["Cc"] = PLATIM_EMAIL
@@ -159,10 +199,7 @@ async def enviar_cita_email(cita: dict) -> bool:
     if not destinatarios:
         return False
 
-    await aiosmtplib.send(
-        msg, hostname="smtp.gmail.com", port=587, start_tls=True,
-        username=GMAIL_USER, password=GMAIL_APP_PASSWORD, recipients=destinatarios,
-    )
+    await _enviar_mensaje(msg, destinatarios)
     return True
 
 
@@ -196,7 +233,7 @@ async def enviar_cancelacion_email(cita: dict) -> bool:
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"Cita CANCELADA con {asesora} - {fecha_txt} {hora} | PLATIM"
-    msg["From"] = GMAIL_USER
+    msg["From"] = EMAIL_FROM
     msg["To"] = destino or PLATIM_EMAIL
     if PLATIM_EMAIL:
         msg["Cc"] = PLATIM_EMAIL
@@ -210,10 +247,7 @@ async def enviar_cancelacion_email(cita: dict) -> bool:
     if not destinatarios:
         return False
 
-    await aiosmtplib.send(
-        msg, hostname="smtp.gmail.com", port=587, start_tls=True,
-        username=GMAIL_USER, password=GMAIL_APP_PASSWORD, recipients=destinatarios,
-    )
+    await _enviar_mensaje(msg, destinatarios)
     return True
 
 
@@ -228,10 +262,11 @@ async def enviar_cotizacion_email(cot: dict, pdf_bytes: bytes) -> bool:
     msg["Subject"] = (
         f"Cotización PLATIM {cot['codigo']} - {cot.get('nombre', 'Cliente')}"
     )
-    msg["From"] = GMAIL_USER
+    msg["From"] = EMAIL_FROM
     msg["To"] = destino
-    if PLATIM_EMAIL:
-        msg["Cc"] = PLATIM_EMAIL
+    copias = _copias_internas()
+    if copias:
+        msg["Cc"] = ", ".join(copias)
 
     # Cuerpo HTML
     msg.attach(MIMEText(_build_html_body(cot), "html", "utf-8"))
@@ -245,18 +280,8 @@ async def enviar_cotizacion_email(cot: dict, pdf_bytes: bytes) -> bool:
     )
     msg.attach(pdf_part)
 
-    # Lista real de destinatarios (To + Cc)
-    destinatarios = [destino]
-    if PLATIM_EMAIL:
-        destinatarios.append(PLATIM_EMAIL)
+    # Lista real de destinatarios (cliente + copias internas: ventas + info)
+    destinatarios = [destino] + _copias_internas()
 
-    await aiosmtplib.send(
-        msg,
-        hostname="smtp.gmail.com",
-        port=587,
-        start_tls=True,
-        username=GMAIL_USER,
-        password=GMAIL_APP_PASSWORD,
-        recipients=destinatarios,
-    )
+    await _enviar_mensaje(msg, destinatarios)
     return True

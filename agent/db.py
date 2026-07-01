@@ -91,8 +91,32 @@ def init_db() -> None:
                 estado   TEXT DEFAULT 'agendada',  -- agendada | cancelada
                 creado   TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS control_conversacion (
+                jid         TEXT PRIMARY KEY,
+                humano      INTEGER DEFAULT 0,  -- 1 = humano tomó control, bot en pausa
+                etiqueta    TEXT DEFAULT '',    -- estado de venta (Compró, No compró, ...)
+                actualizado TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS producto_override (
+                codigo         TEXT PRIMARY KEY,
+                precio_publico INTEGER,
+                precio_mayoreo INTEGER,
+                nombre         TEXT,
+                observaciones  TEXT,
+                actualizado    TEXT
+            );
             """
         )
+        # Columna 'origen' en mensajes (cliente | bot | humano) — migracion suave.
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(mensajes)")]
+        if "origen" not in cols:
+            conn.execute("ALTER TABLE mensajes ADD COLUMN origen TEXT DEFAULT 'bot'")
+        # Columna 'etiqueta' en control_conversacion — migracion suave.
+        ccols = [r["name"] for r in conn.execute("PRAGMA table_info(control_conversacion)")]
+        if "etiqueta" not in ccols:
+            conn.execute("ALTER TABLE control_conversacion ADD COLUMN etiqueta TEXT DEFAULT ''")
 
 
 # ── LEADS ────────────────────────────────────────────────────────────────
@@ -203,16 +227,63 @@ def listar_cotizaciones(limite: int = 100) -> list[dict]:
 
 # ── MENSAJES ─────────────────────────────────────────────────────────────
 
-def registrar_mensaje(jid: str, direccion: str, texto: str) -> dict:
-    """Guarda un mensaje (direccion 'in' o 'out') y lo devuelve."""
+def registrar_mensaje(
+    jid: str, direccion: str, texto: str, origen: str | None = None
+) -> dict:
+    """Guarda un mensaje y lo devuelve.
+    direccion: 'in' | 'out'. origen: 'cliente' | 'bot' | 'humano'
+    (si no se pasa, se deduce de la direccion)."""
+    if origen is None:
+        origen = "cliente" if direccion == "in" else "bot"
     ts = _now()
     with _lock, _conn() as conn:
         cur = conn.execute(
-            "INSERT INTO mensajes (jid, direccion, texto, ts) VALUES (?, ?, ?, ?)",
-            (jid, direccion, texto, ts),
+            "INSERT INTO mensajes (jid, direccion, texto, ts, origen) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (jid, direccion, texto, ts, origen),
         )
         msg_id = cur.lastrowid
-    return {"id": msg_id, "jid": jid, "direccion": direccion, "texto": texto, "ts": ts}
+    return {"id": msg_id, "jid": jid, "direccion": direccion,
+            "texto": texto, "ts": ts, "origen": origen}
+
+
+# ── CONTROL DE CONVERSACION (bot vs humano) ──────────────────────────────
+
+def es_modo_humano(jid: str) -> bool:
+    """True si un humano tomó el control de la conversación (bot en pausa)."""
+    with _lock, _conn() as conn:
+        row = conn.execute(
+            "SELECT humano FROM control_conversacion WHERE jid = ?", (jid,)
+        ).fetchone()
+        return bool(row and row["humano"])
+
+
+def set_modo_humano(jid: str, humano: bool) -> None:
+    """Activa/desactiva el modo humano (pausa/reanuda el bot) para un jid."""
+    with _lock, _conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO control_conversacion (jid, humano, actualizado)
+            VALUES (?, ?, ?)
+            ON CONFLICT(jid) DO UPDATE SET humano = ?, actualizado = ?
+            """,
+            (jid, 1 if humano else 0, _now(), 1 if humano else 0, _now()),
+        )
+
+
+def set_etiqueta(jid: str, etiqueta: str) -> None:
+    """Asigna la etiqueta / estado de venta a una conversación (Compró,
+    No compró, Interesado, etc.)."""
+    etiqueta = (etiqueta or "").strip()
+    with _lock, _conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO control_conversacion (jid, etiqueta, actualizado)
+            VALUES (?, ?, ?)
+            ON CONFLICT(jid) DO UPDATE SET etiqueta = ?, actualizado = ?
+            """,
+            (jid, etiqueta, _now(), etiqueta, _now()),
+        )
 
 
 def listar_conversaciones(limite: int = 100) -> list[dict]:
@@ -230,9 +301,12 @@ def listar_conversaciones(limite: int = 100) -> list[dict]:
                    (SELECT ts FROM mensajes WHERE jid = m.jid
                      ORDER BY id DESC LIMIT 1)   AS ultimo_ts,
                    l.nombre                      AS nombre,
-                   l.empresa                     AS empresa
+                   l.empresa                     AS empresa,
+                   COALESCE(c.humano, 0)         AS humano,
+                   COALESCE(c.etiqueta, '')      AS etiqueta
             FROM mensajes m
             LEFT JOIN leads l ON l.jid = m.jid
+            LEFT JOIN control_conversacion c ON c.jid = m.jid
             GROUP BY m.jid
             ORDER BY ultimo_id DESC
             LIMIT ?
@@ -383,6 +457,54 @@ def listar_citas(limite: int = 100) -> list[dict]:
             (limite,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ── AJUSTES DE PRODUCTOS (precios/nombre editables desde el dashboard) ────
+
+def get_overrides() -> dict:
+    """Devuelve {codigo: {campo: valor}} con los ajustes guardados (solo los
+    campos con valor). Se aplican sobre el catálogo base."""
+    with _lock, _conn() as conn:
+        rows = conn.execute("SELECT * FROM producto_override").fetchall()
+    result = {}
+    for r in rows:
+        d = dict(r)
+        codigo = d.pop("codigo")
+        d.pop("actualizado", None)
+        campos = {k: v for k, v in d.items() if v is not None and v != ""}
+        if campos:
+            result[codigo] = campos
+    return result
+
+
+def set_override(codigo: str, campos: dict) -> None:
+    """Guarda/actualiza el ajuste de un producto. Solo toca los campos dados."""
+    codigo = (codigo or "").strip().upper()
+    permitidos = {"precio_publico", "precio_mayoreo", "nombre", "observaciones"}
+    campos = {k: v for k, v in campos.items() if k in permitidos}
+    if not campos:
+        return
+    for k in ("precio_publico", "precio_mayoreo"):
+        if k in campos and campos[k] is not None and campos[k] != "":
+            campos[k] = int(campos[k])
+    with _lock, _conn() as conn:
+        existe = conn.execute(
+            "SELECT 1 FROM producto_override WHERE codigo = ?", (codigo,)
+        ).fetchone()
+        if existe:
+            sets = ", ".join(f"{k} = ?" for k in campos)
+            conn.execute(
+                f"UPDATE producto_override SET {sets}, actualizado = ? WHERE codigo = ?",
+                (*campos.values(), _now(), codigo),
+            )
+        else:
+            cols = ["codigo", *campos.keys(), "actualizado"]
+            vals = [codigo, *campos.values(), _now()]
+            ph = ", ".join("?" for _ in cols)
+            conn.execute(
+                f"INSERT INTO producto_override ({', '.join(cols)}) VALUES ({ph})",
+                vals,
+            )
 
 
 # Inicializa la base al importar el modulo.

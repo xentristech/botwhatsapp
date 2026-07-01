@@ -881,12 +881,15 @@ def _get_sesion(jid: str) -> SQLiteSession:
     return _sesiones[jid]
 
 
-async def procesar_mensaje(jid: str, texto: str) -> str:
+async def procesar_mensaje(jid: str, texto: str, registrar_in: bool = True) -> str:
     """Corre el agente para un mensaje entrante y devuelve la respuesta.
 
-    Mantiene la memoria de la conversacion por jid mediante InMemorySession.
+    Mantiene la memoria de la conversacion por jid mediante SQLiteSession.
+    registrar_in: si es False no registra el mensaje entrante (lo hace quien llama,
+    p.ej. el webhook cuando agrupa varios mensajes).
     """
-    registrar_mensaje(jid, "in", texto)
+    if registrar_in:
+        registrar_mensaje(jid, "in", texto)
     ctx = PlatimContext(jid=jid)
     sesion = _get_sesion(jid)
 

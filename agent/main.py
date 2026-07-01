@@ -25,12 +25,20 @@ from fastapi.responses import FileResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from agent.agente import procesar_mensaje
+from pydantic import BaseModel
+
+from agent import catalogo
 from agent.db import (
+    es_modo_humano,
     listar_citas,
     listar_conversaciones,
     listar_cotizaciones,
     listar_leads,
     listar_mensajes,
+    registrar_mensaje,
+    set_etiqueta,
+    set_modo_humano,
+    set_override,
 )
 
 load_dotenv()
@@ -44,6 +52,12 @@ _event_queue: "asyncio.Queue[dict]" = asyncio.Queue()
 
 # Evita procesar dos veces el mismo mensaje (Meta reintenta).
 _mensajes_vistos: set[str] = set()
+
+# Agrupador de mensajes (debounce): junta mensajes seguidos del mismo cliente y
+# responde una sola vez. Segundos de espera configurables por entorno.
+DEBOUNCE_SEGUNDOS = float(os.getenv("DEBOUNCE_SEGUNDOS", "6"))
+_buffers: dict[str, list[str]] = {}
+_tareas: dict[str, "asyncio.Task"] = {}
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 DASHBOARD_HTML = os.path.join(BASE_DIR, "dashboard", "index.html")
@@ -139,33 +153,62 @@ async def _procesar_mensaje_entrante(msg: dict, value: dict) -> None:
     if not texto:
         return
 
+    # Registrar el mensaje entrante (dashboard/historial) y avisar en vivo.
+    registrar_mensaje(jid, "in", texto, "cliente")
     await _publicar_evento("mensaje_in", {"jid": jid, "texto": texto})
 
-    try:
-        respuesta = await procesar_mensaje(jid, texto)
-    except Exception as e:  # noqa: BLE001
-        print(f"Error en agente: {e}")
-        respuesta = (
-            "Disculpa, tuvimos un inconveniente técnico. "
-            "¿Puedes repetir tu mensaje?"
-        )
-        from agent.whatsapp import send_text
-
-        with suppress(Exception):
-            await send_text(jid, respuesta)
+    # Si un humano tomó el control, el bot NO responde.
+    if es_modo_humano(jid):
         return
 
-    # Enviar la respuesta del agente al cliente (texto siempre).
-    if respuesta:
-        from agent.whatsapp import send_text
+    # Notas de voz: responder de inmediato. Texto: agrupar (debounce) para no
+    # contestar a cada mensajito cuando el cliente escribe en varios seguidos.
+    if es_audio:
+        await _ejecutar_bot(jid, texto, es_audio=True)
+        return
 
+    _buffers.setdefault(jid, []).append(texto)
+    tarea = _tareas.get(jid)
+    if tarea and not tarea.done():
+        tarea.cancel()
+    _tareas[jid] = asyncio.create_task(_procesar_con_espera(jid))
+
+
+async def _procesar_con_espera(jid: str) -> None:
+    """Espera a que el cliente termine de escribir y responde una sola vez."""
+    try:
+        await asyncio.sleep(DEBOUNCE_SEGUNDOS)
+    except asyncio.CancelledError:
+        return  # llegó otro mensaje: esta tanda se descarta, sigue la nueva
+    textos = _buffers.pop(jid, [])
+    _tareas.pop(jid, None)
+    if not textos or es_modo_humano(jid):
+        return
+    await _ejecutar_bot(jid, " ".join(textos), es_audio=False)
+
+
+async def _ejecutar_bot(jid: str, texto: str, es_audio: bool = False) -> None:
+    """Corre el agente y envía la respuesta (texto + voz si aplica).
+    No registra el 'in' (ya se registró al recibir cada mensaje)."""
+    from agent.whatsapp import send_text
+
+    try:
+        respuesta = await procesar_mensaje(jid, texto, registrar_in=False)
+    except Exception as e:  # noqa: BLE001
+        print(f"Error en agente: {e}")
+        with suppress(Exception):
+            await send_text(
+                jid,
+                "Disculpa, tuvimos un inconveniente técnico. "
+                "¿Puedes repetir tu mensaje?",
+            )
+        return
+
+    if respuesta:
         with suppress(Exception):
             await send_text(jid, respuesta)
-
-        # Si el cliente escribio por nota de voz, responder tambien con audio.
         if es_audio:
             await _responder_con_audio(jid, respuesta)
-
         await _publicar_evento("mensaje_out", {"jid": jid, "texto": respuesta})
 
 
@@ -226,6 +269,113 @@ async def api_mensajes(jid: str | None = None, limite: int = 200):
     # Devuelto en orden cronologico ascendente para pintar el chat.
     msgs = listar_mensajes(jid, limite)
     return list(reversed(msgs))
+
+
+class EnviarBody(BaseModel):
+    jid: str
+    texto: str
+
+
+@app.post("/api/enviar")
+async def api_enviar(body: EnviarBody):
+    """Envia un mensaje al cliente ESCRITO POR UN HUMANO desde el dashboard.
+    Al hacerlo, activa el modo humano (pausa el bot) para esa conversación."""
+    jid = (body.jid or "").strip()
+    texto = (body.texto or "").strip()
+    if not jid or not texto:
+        return JSONResponse({"error": "Faltan jid o texto"}, status_code=400)
+
+    from agent.whatsapp import send_text
+
+    try:
+        await send_text(jid, texto)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"No se pudo enviar: {e}"}, status_code=502)
+
+    registrar_mensaje(jid, "out", texto, "humano")
+    set_modo_humano(jid, True)  # tomar control -> pausar bot
+    await _publicar_evento(
+        "mensaje_out", {"jid": jid, "texto": texto, "origen": "humano"}
+    )
+    return {"ok": True, "humano": True}
+
+
+class ModoBody(BaseModel):
+    jid: str
+    humano: bool
+
+
+@app.post("/api/modo")
+async def api_modo(body: ModoBody):
+    """Activa/desactiva el modo humano (pausa/reanuda el bot) para un jid."""
+    jid = (body.jid or "").strip()
+    if not jid:
+        return JSONResponse({"error": "Falta jid"}, status_code=400)
+    set_modo_humano(jid, body.humano)
+    await _publicar_evento("modo", {"jid": jid, "humano": body.humano})
+    return {"ok": True, "jid": jid, "humano": body.humano}
+
+
+@app.get("/api/productos")
+async def api_productos(q: str = "", categoria: str = "", limite: int = 60):
+    """Lista productos (con ajustes aplicados) para el editor del dashboard."""
+    prods = catalogo.buscar(q, categoria)[:limite]
+    return [
+        {
+            "codigo": p["codigo"],
+            "nombre": p["nombre"],
+            "categoria": p["categoria"],
+            "precio_publico": p["precio_publico"],
+            "precio_mayoreo": p["precio_mayoreo"],
+            "observaciones": p.get("observaciones", ""),
+        }
+        for p in prods
+    ]
+
+
+class ProductoBody(BaseModel):
+    codigo: str
+    precio_publico: int | None = None
+    precio_mayoreo: int | None = None
+    nombre: str | None = None
+    observaciones: str | None = None
+
+
+@app.post("/api/producto")
+async def api_producto(body: ProductoBody):
+    """Guarda un ajuste de producto (precio/nombre) hecho desde el dashboard."""
+    codigo = (body.codigo or "").strip().upper()
+    if not codigo or not catalogo.obtener(codigo):
+        return JSONResponse({"error": "Código de producto inválido"}, status_code=400)
+    campos = {}
+    if body.precio_publico is not None:
+        campos["precio_publico"] = body.precio_publico
+    if body.precio_mayoreo is not None:
+        campos["precio_mayoreo"] = body.precio_mayoreo
+    if body.nombre is not None and body.nombre.strip():
+        campos["nombre"] = body.nombre.strip()
+    if body.observaciones is not None:
+        campos["observaciones"] = body.observaciones.strip()
+    if not campos:
+        return JSONResponse({"error": "Nada para actualizar"}, status_code=400)
+    set_override(codigo, campos)
+    return {"ok": True, "codigo": codigo, "actualizado": campos}
+
+
+class EtiquetaBody(BaseModel):
+    jid: str
+    etiqueta: str
+
+
+@app.post("/api/etiqueta")
+async def api_etiqueta(body: EtiquetaBody):
+    """Asigna el estado de venta (Compró, No compró, etc.) a una conversación."""
+    jid = (body.jid or "").strip()
+    if not jid:
+        return JSONResponse({"error": "Falta jid"}, status_code=400)
+    set_etiqueta(jid, body.etiqueta)
+    await _publicar_evento("etiqueta", {"jid": jid, "etiqueta": body.etiqueta})
+    return {"ok": True, "jid": jid, "etiqueta": body.etiqueta}
 
 
 @app.get("/api/stream")

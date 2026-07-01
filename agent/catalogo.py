@@ -146,9 +146,11 @@ def buscar(query: str = "", categoria: str = "") -> list[dict]:
     coincidencia, ordenados por relevancia."""
     tokens = [t for t in _norm(query).split() if t and t not in _STOPWORDS]
     cat = _norm(categoria)
+    overrides = _overrides()
 
     candidatos = []  # (score, indice, producto)
-    for idx, p in enumerate(PRODUCTOS):
+    for idx, p0 in enumerate(PRODUCTOS):
+        p = _aplicar(p0, overrides)
         if cat and cat not in _norm(p["categoria"]):
             continue
         if not tokens:
@@ -178,9 +180,25 @@ def buscar(query: str = "", categoria: str = "") -> list[dict]:
     return [p for _, _, p in filtrados]
 
 
+def _overrides() -> dict:
+    """Ajustes guardados desde el dashboard (import perezoso para evitar ciclos)."""
+    try:
+        from agent import db
+        return db.get_overrides()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _aplicar(p: dict, overrides: dict) -> dict:
+    """Devuelve el producto con los ajustes (precio/nombre) aplicados encima."""
+    ov = overrides.get(p["codigo"])
+    return {**p, **ov} if ov else p
+
+
 def obtener(codigo: str) -> dict | None:
-    """Devuelve un producto por su codigo exacto, o None."""
-    return PRODUCTOS_POR_CODIGO.get((codigo or "").strip().upper())
+    """Devuelve un producto por su codigo exacto (con ajustes aplicados), o None."""
+    p = PRODUCTOS_POR_CODIGO.get((codigo or "").strip().upper())
+    return _aplicar(p, _overrides()) if p else None
 
 
 def precio_de(producto: dict, es_mayorista: bool = False) -> int:
