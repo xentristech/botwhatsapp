@@ -39,6 +39,91 @@ def _moneda(valor) -> str:
     return "$" + f"{n:,}".replace(",", ".")
 
 
+def generar_pdf_catalogo(productos: list[dict], tipo_precio: str = "publico") -> bytes:
+    """Genera un PDF con el catálogo completo (agrupado por categoría)."""
+    from collections import OrderedDict
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        rightMargin=1.5 * cm, leftMargin=1.5 * cm,
+        topMargin=1.5 * cm, bottomMargin=1.5 * cm,
+        title="Catálogo PLATIM",
+    )
+    getSampleStyleSheet()
+    story = []
+
+    header_style = ParagraphStyle(
+        "h", fontSize=20, textColor=colors.white, fontName="Helvetica-Bold")
+    sub_style = ParagraphStyle(
+        "s", fontSize=10, textColor=colors.HexColor("#90caf9"))
+    from datetime import datetime as _dt
+    header = Table(
+        [[Paragraph("PLATIM", header_style),
+          Paragraph("Catálogo de productos", header_style)],
+         [Paragraph("Dotaciones y Seguridad Industrial", sub_style),
+          Paragraph(f"Fecha: {_dt.utcnow().isoformat()[:10]}", sub_style)]],
+        colWidths=[9 * cm, 9 * cm])
+    header.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), AZUL_PLATIM),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12), ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 10), ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+    story.append(header)
+    story.append(Spacer(1, 0.4 * cm))
+
+    es_may = tipo_precio == "mayoreo"
+    celda = ParagraphStyle("celda", fontSize=9, leading=11)
+    grupos = OrderedDict()
+    for p in productos:
+        grupos.setdefault(p.get("categoria", "General"), []).append(p)
+
+    rows = [["Código", "Producto", "Precio mayoreo" if es_may else "Precio"]]
+    filas_cat = []
+    for cat, prods in grupos.items():
+        rows.append([cat, "", ""])
+        filas_cat.append(len(rows) - 1)
+        for p in prods:
+            precio = p.get("precio_mayoreo" if es_may else "precio_publico", 0)
+            rows.append([p.get("codigo", ""),
+                         Paragraph(str(p.get("nombre", "")), celda),
+                         _moneda(precio)])
+
+    tabla = Table(rows, colWidths=[3 * cm, 9.5 * cm, 3.5 * cm], repeatRows=1)
+    estilo = [
+        ("BACKGROUND", (0, 0), (-1, 0), AZUL_PLATIM),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#e0e0e0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+    ]
+    for r in filas_cat:
+        estilo += [
+            ("SPAN", (0, r), (-1, r)),
+            ("BACKGROUND", (0, r), (-1, r), AZUL_CLARO),
+            ("FONTNAME", (0, r), (-1, r), "Helvetica-Bold"),
+            ("TEXTCOLOR", (0, r), (-1, r), AZUL_PLATIM),
+        ]
+    tabla.setStyle(TableStyle(estilo))
+    story.append(tabla)
+    story.append(Spacer(1, 0.6 * cm))
+
+    footer = ParagraphStyle("f", fontSize=8, textColor=colors.grey)
+    tipo_txt = "mayoreo" if es_may else "público"
+    story.append(Paragraph(
+        f"Precios de {tipo_txt} en pesos colombianos (COP). IVA no incluido salvo "
+        "indicación. Precios sujetos a cambio. ventas@platim.co | Palmira, Valle "
+        "del Cauca, Colombia.", footer))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 def generar_pdf_cotizacion(cot: dict) -> bytes:
     """Genera el PDF de la cotizacion y devuelve los bytes."""
     buffer = io.BytesIO()

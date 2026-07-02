@@ -276,6 +276,35 @@ def comparar_productos(
 
 
 @function_tool
+async def enviar_catalogo_pdf(ctx: RunContextWrapper[PlatimContext]) -> str:
+    """Genera el catálogo COMPLETO de productos en PDF y se lo envía al cliente
+    por WhatsApp. Usar cuando el cliente pida la lista o el catálogo completo."""
+    jid = ctx.context.jid
+    estado = get_estado(jid)
+    tipo = estado.get("tipo_precio", "publico")
+    productos = catalogo.buscar("")  # todos los disponibles (excluye agotados)
+    if not productos:
+        return json.dumps({"error": "No hay productos disponibles."})
+
+    from agent.pdf_service import generar_pdf_catalogo
+
+    pdf = generar_pdf_catalogo(productos, tipo)
+    try:
+        from agent.whatsapp import send_document, upload_media
+
+        media_id = await upload_media(pdf, "Catalogo_PLATIM.pdf", "application/pdf")
+        caption = (
+            f"📋 Catálogo PLATIM ({len(productos)} productos) — precios "
+            + ("de mayoreo" if tipo == "mayoreo" else "al público")
+        )
+        await send_document(jid, media_id, "Catalogo_PLATIM.pdf", caption)
+        return json.dumps({"ok": True, "productos": len(productos)}, ensure_ascii=False)
+    except Exception as e:  # noqa: BLE001
+        print(f"Error enviando catálogo: {e}")
+        return json.dumps({"error": "No se pudo enviar el catálogo por WhatsApp."})
+
+
+@function_tool
 def agregar_item_cotizacion(
     ctx: RunContextWrapper[PlatimContext],
     codigo: str,
@@ -864,6 +893,8 @@ REGLAS:
 - Saluda siempre mencionando PLATIM en el primer mensaje
 - Pregunta si es cliente minorista o mayorista cuando pregunten precios
 - SIEMPRE usa buscar_productos antes de mencionar productos
+- Si el cliente pide la LISTA o el CATÁLOGO completo, usa enviar_catalogo_pdf
+  para mandarle el PDF con todos los productos
 - Cuando el cliente confirme cantidad de un producto, usa agregar_item_cotizacion
 - Si el cliente pide VARIOS productos en un mensaje (ej. "3 botas, 1 gafa y un
   uniforme"), agrégalos TODOS: una llamada a agregar_item_cotizacion por CADA
@@ -939,6 +970,7 @@ platim_agent = Agent[PlatimContext](
     tools=[
         buscar_productos,
         comparar_productos,
+        enviar_catalogo_pdf,
         agregar_item_cotizacion,
         ver_cotizacion_actual,
         registrar_datos_cliente,
