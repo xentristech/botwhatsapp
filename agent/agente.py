@@ -34,11 +34,13 @@ from agent.db import (
     cita_existente,
     citas_de_cliente,
     crear_cita,
+    get_cotizacion,
     get_estado_cot,
     guardar_cotizacion,
     horas_tomadas,
     registrar_mensaje,
     save_estado_cot,
+    ultima_cotizacion_de,
     upsert_lead,
 )
 
@@ -769,6 +771,65 @@ async def cancelar_cita_asesora(
 
 
 @function_tool
+async def generar_link_pago(
+    ctx: RunContextWrapper[PlatimContext], codigo: str = ""
+) -> str:
+    """Genera un link de pago (Mercado Pago) y le envía al cliente un botón
+    'Pagar ahora' por WhatsApp. Usar cuando el cliente diga que quiere pagar.
+    Si no se da 'codigo', usa la última cotización del cliente."""
+    jid = ctx.context.jid
+    cot = get_cotizacion(codigo) if codigo else ultima_cotizacion_de(jid)
+    if not cot:
+        return json.dumps({
+            "error": "No hay una cotización para cobrar. Genera la cotización primero."
+        })
+    cot["jid"] = jid
+
+    try:
+        from agent.pagos_service import crear_link_pago
+
+        res = await crear_link_pago(cot)
+    except Exception as e:  # noqa: BLE001
+        print(f"Error creando link de pago: {e}")
+        return json.dumps({"error": "No se pudo generar el link de pago ahora."})
+
+    url = res.get("url")
+    if not url:
+        return json.dumps({"error": "El proveedor de pagos no devolvió un link."})
+
+    boton_ok = False
+    try:
+        from agent.whatsapp import send_cta_button
+
+        await send_cta_button(
+            jid,
+            f"Ya puedes pagar tu cotización {cot['codigo']} por "
+            f"{_moneda(cot['total'])} COP de forma segura 👇",
+            "Pagar ahora",
+            url,
+        )
+        boton_ok = True
+    except Exception as e:  # noqa: BLE001
+        print(f"Error enviando botón de pago: {e}")
+        try:
+            from agent.whatsapp import send_text
+
+            await send_text(
+                jid, f"Paga tu cotización {cot['codigo']} aquí: {url}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    return json.dumps({
+        "ok": True,
+        "codigo": cot["codigo"],
+        "total": cot["total"],
+        "link": url,
+        "boton_enviado": boton_ok,
+    }, ensure_ascii=False)
+
+
+@function_tool
 def limpiar_cotizacion(ctx: RunContextWrapper[PlatimContext]) -> str:
     """Reinicia la cotizacion actual. Usar si el cliente quiere cambiar
     todo o empezar de nuevo. Conserva los datos de contacto ya registrados."""
@@ -813,6 +874,9 @@ REGLAS:
   su correo no es válido o no está activo y pídele que lo escriba de nuevo; el
   resto de la cotización (WhatsApp) sí se envió
 - Solo usa generar_y_enviar_cotizacion cuando el cliente lo confirme
+- PAGOS: si el cliente dice que quiere PAGAR, usa generar_link_pago para
+  enviarle un botón de pago (Mercado Pago) por su cotización. Confírmale que le
+  llegó el botón "Pagar ahora" y que el pago es seguro
 - Muestra precios como: $85.000 COP
 - FORMATO WHATSAPP (NO uses Markdown): la negrita es con UN SOLO asterisco
   *así*, NUNCA con doble **así**. La cursiva es con guion bajo _así_. NO uses
@@ -870,6 +934,7 @@ platim_agent = Agent[PlatimContext](
         agendar_cita_asesora,
         mis_citas_asesora,
         cancelar_cita_asesora,
+        generar_link_pago,
         limpiar_cotizacion,
     ],
 )

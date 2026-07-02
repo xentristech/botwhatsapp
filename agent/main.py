@@ -37,6 +37,7 @@ from agent.db import (
     listar_cotizaciones,
     listar_leads,
     listar_mensajes,
+    marcar_cotizacion_pagada,
     registrar_mensaje,
     set_etiqueta,
     set_modo_humano,
@@ -242,6 +243,49 @@ async def _responder_con_audio(jid: str, texto: str) -> None:
         await send_audio(jid, media_id)
     except Exception as e:  # noqa: BLE001
         print(f"Error enviando nota de voz: {e}")
+
+
+# ── Webhook de Mercado Pago (confirmacion de pago) ───────────────────────
+
+@app.post("/webhook/mercadopago")
+@app.get("/webhook/mercadopago")
+async def webhook_mercadopago(request: Request):
+    params = request.query_params
+    payment_id = params.get("data.id") or params.get("id")
+    tipo = params.get("type") or params.get("topic")
+    if not payment_id:
+        with suppress(Exception):
+            body = await request.json()
+            tipo = body.get("type") or body.get("topic") or tipo
+            payment_id = (body.get("data") or {}).get("id") or body.get("id")
+
+    if tipo and "payment" in str(tipo) and payment_id:
+        try:
+            from agent.pagos_service import consultar_pago
+
+            pago = await consultar_pago(str(payment_id))
+            if pago.get("status") == "approved":
+                codigo = pago.get("external_reference", "")
+                cot = marcar_cotizacion_pagada(codigo) if codigo else None
+                if cot:
+                    jid = cot.get("jid", "")
+                    if jid:
+                        set_etiqueta(jid, "Compró")
+                        from agent.whatsapp import send_text
+
+                        with suppress(Exception):
+                            await send_text(
+                                jid,
+                                f"✅ ¡Pago recibido! Tu cotización {codigo} quedó "
+                                "pagada. ¡Gracias por tu compra en PLATIM! 🙌",
+                            )
+                        await _publicar_evento(
+                            "pago", {"jid": jid, "codigo": codigo}
+                        )
+        except Exception as e:  # noqa: BLE001
+            print(f"Error procesando webhook Mercado Pago: {e}")
+
+    return JSONResponse({"status": "ok"})
 
 
 # ── API del dashboard ────────────────────────────────────────────────────

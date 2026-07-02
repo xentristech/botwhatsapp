@@ -138,6 +138,12 @@ def init_db() -> None:
         ocols = [r["name"] for r in conn.execute("PRAGMA table_info(producto_override)")]
         if "sin_stock" not in ocols:
             conn.execute("ALTER TABLE producto_override ADD COLUMN sin_stock INTEGER")
+        # Columna 'estado_pago' en cotizaciones — migracion suave.
+        cotcols = [r["name"] for r in conn.execute("PRAGMA table_info(cotizaciones)")]
+        if "estado_pago" not in cotcols:
+            conn.execute(
+                "ALTER TABLE cotizaciones ADD COLUMN estado_pago TEXT DEFAULT 'pendiente'"
+            )
 
 
 # ── LEADS ────────────────────────────────────────────────────────────────
@@ -233,6 +239,38 @@ def get_cotizacion(codigo: str) -> dict | None:
         return None
     d = dict(row)
     d["items"] = json.loads(d.pop("items_json") or "[]")
+    return d
+
+
+def ultima_cotizacion_de(jid: str) -> dict | None:
+    """Devuelve la cotización más reciente de un cliente (para cobrarla)."""
+    with _lock, _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM cotizaciones WHERE jid = ? ORDER BY ts DESC LIMIT 1",
+            (jid,),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["items"] = json.loads(d.pop("items_json") or "[]")
+    return d
+
+
+def marcar_cotizacion_pagada(codigo: str) -> dict | None:
+    """Marca una cotización como pagada. Devuelve la cotización, o None."""
+    with _lock, _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM cotizaciones WHERE codigo = ?", (codigo,)
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute(
+            "UPDATE cotizaciones SET estado_pago = 'pagado' WHERE codigo = ?",
+            (codigo,),
+        )
+    d = dict(row)
+    d["items"] = json.loads(d.pop("items_json") or "[]")
+    d["estado_pago"] = "pagado"
     return d
 
 

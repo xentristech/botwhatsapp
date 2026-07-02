@@ -58,6 +58,31 @@ async def send_text(to: str, texto: str) -> dict:
         return r.json()
 
 
+async def send_cta_button(to: str, cuerpo: str, boton_texto: str, url: str) -> dict:
+    """Envia un mensaje interactivo con un botón que abre una URL (CTA).
+    Ideal para el botón 'Pagar' con el link de Mercado Pago."""
+    numero = _normalizar_numero(to)
+    endpoint = f"{BASE_URL}/messages"
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": numero,
+        "type": "interactive",
+        "interactive": {
+            "type": "cta_url",
+            "body": {"text": cuerpo[:1024]},
+            "action": {
+                "name": "cta_url",
+                "parameters": {"display_text": boton_texto[:20], "url": url},
+            },
+        },
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(endpoint, json=payload, headers=HEADERS)
+        r.raise_for_status()
+        return r.json()
+
+
 async def upload_media(
     contenido: bytes, filename: str, mime: str = "application/pdf"
 ) -> str:
