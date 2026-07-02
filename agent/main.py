@@ -48,7 +48,43 @@ load_dotenv()
 
 META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "platim2024")
 
+# ── Autenticación del dashboard (Basic Auth) ─────────────────────────────
+# Protege /dashboard y /api/*. Los webhooks (/webhook, /webhook/mercadopago)
+# quedan libres para Meta y Mercado Pago. Solo se exige si hay contraseña.
+DASHBOARD_USER = os.getenv("DASHBOARD_USER", "platim")
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
+
+
+def _basic_ok(auth_header: str) -> bool:
+    import base64
+    import secrets
+
+    if not auth_header.startswith("Basic "):
+        return False
+    try:
+        usuario, _, clave = base64.b64decode(auth_header[6:]).decode().partition(":")
+    except Exception:  # noqa: BLE001
+        return False
+    return (
+        secrets.compare_digest(usuario, DASHBOARD_USER)
+        and secrets.compare_digest(clave, DASHBOARD_PASSWORD)
+    )
+
+
 app = FastAPI(title="PLATIM Agent", version="1.0.0")
+
+
+@app.middleware("http")
+async def _auth_dashboard(request: Request, call_next):
+    ruta = request.url.path
+    protegido = ruta == "/dashboard" or ruta.startswith("/api/")
+    if protegido and DASHBOARD_PASSWORD:
+        if not _basic_ok(request.headers.get("Authorization", "")):
+            return Response(
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="PLATIM Dashboard"'},
+            )
+    return await call_next(request)
 
 # Cola de eventos para el dashboard (SSE).
 _event_queue: "asyncio.Queue[dict]" = asyncio.Queue()
