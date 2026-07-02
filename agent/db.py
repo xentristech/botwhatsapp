@@ -15,7 +15,7 @@ import json
 import os
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 DB_PATH = os.path.join(DATA_DIR, "platim.db")
@@ -144,6 +144,10 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE cotizaciones ADD COLUMN estado_pago TEXT DEFAULT 'pendiente'"
             )
+        # Columna 'seguimiento_ts' en control_conversacion — migracion suave.
+        cc2 = [r["name"] for r in conn.execute("PRAGMA table_info(control_conversacion)")]
+        if "seguimiento_ts" not in cc2:
+            conn.execute("ALTER TABLE control_conversacion ADD COLUMN seguimiento_ts TEXT")
 
 
 # ── LEADS ────────────────────────────────────────────────────────────────
@@ -516,6 +520,63 @@ def listar_citas(limite: int = 100) -> list[dict]:
             (limite,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ── SEGUIMIENTO (recuperar clientes que dejaron en visto) ────────────────
+
+def candidatos_seguimiento(horas: float, ventana_horas: float = 22) -> list[str]:
+    """Devuelve los jids a los que hay que enviar un mensaje de seguimiento:
+    - el último mensaje fue del bot (el cliente no respondió),
+    - han pasado al menos 'horas' desde ese último mensaje,
+    - el cliente escribió hace menos de 'ventana_horas' (dentro de la ventana de
+      24h de WhatsApp, para poder enviar texto libre),
+    - no está en modo humano,
+    - no se le envió ya un seguimiento desde su último mensaje."""
+    ahora = datetime.now(timezone.utc)
+    limite_silencio = (ahora - timedelta(hours=horas)).isoformat()
+    limite_ventana = (ahora - timedelta(hours=ventana_horas)).isoformat()
+    candidatos = []
+    with _lock, _conn() as conn:
+        jids = [r["jid"] for r in conn.execute("SELECT DISTINCT jid FROM mensajes")]
+        for jid in jids:
+            um = conn.execute(
+                "SELECT direccion, ts FROM mensajes WHERE jid = ? "
+                "ORDER BY id DESC LIMIT 1", (jid,)
+            ).fetchone()
+            if not um or um["direccion"] != "out":
+                continue
+            if um["ts"] > limite_silencio:   # aún no pasa el tiempo de silencio
+                continue
+            ui = conn.execute(
+                "SELECT ts FROM mensajes WHERE jid = ? AND direccion = 'in' "
+                "ORDER BY id DESC LIMIT 1", (jid,)
+            ).fetchone()
+            if not ui or ui["ts"] < limite_ventana:  # fuera de la ventana 24h
+                continue
+            cc = conn.execute(
+                "SELECT humano, seguimiento_ts FROM control_conversacion WHERE jid = ?",
+                (jid,),
+            ).fetchone()
+            if cc:
+                if cc["humano"]:
+                    continue
+                if cc["seguimiento_ts"] and cc["seguimiento_ts"] > ui["ts"]:
+                    continue  # ya se le hizo seguimiento tras su último mensaje
+            candidatos.append(jid)
+    return candidatos
+
+
+def marcar_seguimiento(jid: str) -> None:
+    """Registra que a este cliente ya se le envió un seguimiento."""
+    with _lock, _conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO control_conversacion (jid, seguimiento_ts, actualizado)
+            VALUES (?, ?, ?)
+            ON CONFLICT(jid) DO UPDATE SET seguimiento_ts = ?, actualizado = ?
+            """,
+            (jid, _now(), _now(), _now(), _now()),
+        )
 
 
 # ── AJUSTES DE PRODUCTOS (precios/nombre editables desde el dashboard) ────

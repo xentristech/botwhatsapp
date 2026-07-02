@@ -29,9 +29,11 @@ from pydantic import BaseModel
 
 from agent import catalogo
 from agent.db import (
+    candidatos_seguimiento,
     crear_producto,
     es_modo_humano,
     existe_producto_codigo,
+    marcar_seguimiento,
     listar_citas,
     listar_conversaciones,
     listar_cotizaciones,
@@ -98,6 +100,17 @@ DEBOUNCE_SEGUNDOS = float(os.getenv("DEBOUNCE_SEGUNDOS", "6"))
 _buffers: dict[str, list[str]] = {}
 _tareas: dict[str, "asyncio.Task"] = {}
 
+# Seguimiento automático (recuperar clientes que dejaron "en visto").
+SEGUIMIENTO_ACTIVO = os.getenv("SEGUIMIENTO_ACTIVO", "true").lower() in ("1", "true", "si", "yes")
+SEGUIMIENTO_HORAS = float(os.getenv("SEGUIMIENTO_HORAS", "3"))
+SEGUIMIENTO_INTERVALO_MIN = float(os.getenv("SEGUIMIENTO_INTERVALO_MIN", "15"))
+MENSAJE_SEGUIMIENTO = os.getenv(
+    "MENSAJE_SEGUIMIENTO",
+    "Hola, vimos que nos dejaste en visto🥹, quisiera saber si tienes alguna "
+    "duda que no pudimos resolver, recuerda que estoy aquí para ayudarte y "
+    "aclarar todas tus inquietudes, cuéntame ¿en qué puedo ayudarte?☺️",
+)
+
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 DASHBOARD_HTML = os.path.join(BASE_DIR, "dashboard", "index.html")
 
@@ -112,6 +125,39 @@ async def _publicar_evento(tipo: str, data: dict) -> None:
 @app.get("/")
 async def root():
     return {"status": "ok", "servicio": "PLATIM Agent"}
+
+
+async def _bucle_seguimiento() -> None:
+    """Revisa periódicamente y envía un mensaje a los clientes que dejaron
+    'en visto' (no respondieron dentro de la ventana de 24h)."""
+    from agent.whatsapp import send_text
+
+    while True:
+        await asyncio.sleep(SEGUIMIENTO_INTERVALO_MIN * 60)
+        try:
+            for jid in candidatos_seguimiento(SEGUIMIENTO_HORAS):
+                try:
+                    await send_text(jid, MENSAJE_SEGUIMIENTO)
+                    registrar_mensaje(jid, "out", MENSAJE_SEGUIMIENTO, "bot")
+                    marcar_seguimiento(jid)
+                    await _publicar_evento(
+                        "mensaje_out", {"jid": jid, "texto": MENSAJE_SEGUIMIENTO}
+                    )
+                    print(f"Seguimiento enviado a {jid}")
+                except Exception as e:  # noqa: BLE001
+                    print(f"Error enviando seguimiento a {jid}: {e}")
+        except Exception as e:  # noqa: BLE001
+            print(f"Error en bucle de seguimiento: {e}")
+
+
+@app.on_event("startup")
+async def _iniciar_tareas():
+    if SEGUIMIENTO_ACTIVO:
+        asyncio.create_task(_bucle_seguimiento())
+        print(
+            f"Seguimiento automático activo: {SEGUIMIENTO_HORAS}h de silencio, "
+            f"revisa cada {SEGUIMIENTO_INTERVALO_MIN} min."
+        )
 
 
 # ── Webhook Meta: verificacion (GET) ─────────────────────────────────────
