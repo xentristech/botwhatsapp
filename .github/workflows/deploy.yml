@@ -1,0 +1,23 @@
+name: Deploy al VPS
+
+# Cada push a main -> el VPS hace pull, rebuild y restart automático.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}   # permite lanzarlo a mano desde la pestaña Actions
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Desplegar por SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd ~/botwhatsapp
+            git pull --ff-only
+            sudo docker build -t platim-agent .
+            sudo systemctl restart platim
