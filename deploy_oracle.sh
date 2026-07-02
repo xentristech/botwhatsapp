@@ -25,7 +25,8 @@ fi
 
 echo "==> [2/6] Instalando Caddy (HTTPS automático)..."
 if ! command -v caddy >/dev/null 2>&1; then
-  sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+  # Nota: NO instalamos debian-keyring (29 MB, innecesario y muy lento en algunos mirrors).
+  sudo apt-get install -y apt-transport-https curl gnupg
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
     | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
