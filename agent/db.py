@@ -452,6 +452,52 @@ def save_estado_cot(jid: str, estado: dict) -> None:
         )
 
 
+def agregar_item_estado(jid: str, item: dict) -> dict:
+    """Agrega o acumula un item en el estado en curso de forma ATÓMICA (todo el
+    leer-modificar-guardar bajo el mismo _lock y conexion). Evita que llamadas
+    concurrentes a agregar_item se pisen (el modelo suele llamarlas en paralelo
+    cuando el cliente pide varios productos en un mismo mensaje).
+    Devuelve {'items': [...], 'total': n}."""
+    with _lock, _conn() as conn:
+        row = conn.execute(
+            "SELECT tipo_precio, items_json, cliente_json "
+            "FROM estado_cotizacion WHERE jid = ?",
+            (jid,),
+        ).fetchone()
+        if row:
+            tipo_precio = row["tipo_precio"] or "publico"
+            items = json.loads(row["items_json"] or "[]")
+            cliente_json = row["cliente_json"] or "{}"
+        else:
+            tipo_precio = "publico"
+            items = []
+            cliente_json = "{}"
+        for it in items:
+            if it["codigo"] == item["codigo"]:
+                it["cantidad"] += item["cantidad"]
+                it["precio"] = item["precio"]
+                it["subtotal"] = it["precio"] * it["cantidad"]
+                break
+        else:
+            items.append(item)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO estado_cotizacion
+                (jid, tipo_precio, items_json, cliente_json, actualizado)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                jid,
+                tipo_precio,
+                json.dumps(items, ensure_ascii=False),
+                cliente_json,
+                _now(),
+            ),
+        )
+        total = sum(i["subtotal"] for i in items)
+        return {"items": items, "total": total}
+
+
 # ── CITAS (asesora Patricia) ─────────────────────────────────────────────
 
 def horas_tomadas(fecha: str) -> set[str]:

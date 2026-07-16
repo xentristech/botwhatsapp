@@ -31,6 +31,7 @@ from agent import catalogo
 from agent.db import (
     DB_PATH,
     actualizar_cita_email,
+    agregar_item_estado,
     cancelar_cita,
     cita_existente,
     citas_de_cliente,
@@ -324,38 +325,29 @@ def agregar_item_cotizacion(
 ) -> str:
     """Agrega un producto confirmado a la cotizacion.
     Llamar cada vez que el cliente confirme producto + cantidad."""
-    estado = get_estado(ctx.context.jid)
+    jid = ctx.context.jid
     cantidad = max(1, int(cantidad))
 
     # Si el precio no viene o viene 0, lo tomamos del catalogo segun tipo.
     prod = catalogo.obtener(codigo)
     if (not precio or precio <= 0) and prod:
+        estado = get_estado(jid)
         precio = catalogo.precio_de(prod, estado.get("tipo_precio") == "mayoreo")
-    precio = int(precio)
-    subtotal = precio * cantidad
+    precio = int(precio or 0)
 
-    # Si el item ya existe, acumula cantidad.
-    for it in estado["items"]:
-        if it["codigo"] == codigo:
-            it["cantidad"] += cantidad
-            it["precio"] = precio
-            it["subtotal"] = it["precio"] * it["cantidad"]
-            break
-    else:
-        estado["items"].append(
-            {
-                "codigo": codigo,
-                "nombre": nombre or (prod["nombre"] if prod else codigo),
-                "cantidad": cantidad,
-                "precio": precio,
-                "subtotal": subtotal,
-            }
-        )
+    item = {
+        "codigo": codigo,
+        "nombre": nombre or (prod["nombre"] if prod else codigo),
+        "cantidad": cantidad,
+        "precio": precio,
+        "subtotal": precio * cantidad,
+    }
 
-    save_estado(ctx.context.jid, estado)
-    total = sum(i["subtotal"] for i in estado["items"])
+    # Agregado ATÓMICO: leer-modificar-guardar bajo el candado de la DB para que
+    # varias llamadas en paralelo (varios productos en un mensaje) no se pisen.
+    res = agregar_item_estado(jid, item)
     return json.dumps(
-        {"ok": True, "items": len(estado["items"]), "total": total},
+        {"ok": True, "items": len(res["items"]), "total": res["total"]},
         ensure_ascii=False,
     )
 
