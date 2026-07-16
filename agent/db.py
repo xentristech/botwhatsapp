@@ -13,6 +13,7 @@ de forma apreciable.
 
 import json
 import os
+import secrets
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
@@ -148,6 +149,10 @@ def init_db() -> None:
         cc2 = [r["name"] for r in conn.execute("PRAGMA table_info(control_conversacion)")]
         if "seguimiento_ts" not in cc2:
             conn.execute("ALTER TABLE control_conversacion ADD COLUMN seguimiento_ts TEXT")
+        # Columna 'token' en cotizaciones — link público único por cliente (descarga).
+        cot2 = [r["name"] for r in conn.execute("PRAGMA table_info(cotizaciones)")]
+        if "token" not in cot2:
+            conn.execute("ALTER TABLE cotizaciones ADD COLUMN token TEXT")
 
 
 # ── LEADS ────────────────────────────────────────────────────────────────
@@ -211,12 +216,13 @@ def guardar_cotizacion(cot: dict) -> str:
     Devuelve el codigo de la cotizacion."""
     with _lock, _conn() as conn:
         codigo = cot.get("codigo") or _generar_codigo_cotizacion(conn)
+        token = cot.get("token") or secrets.token_urlsafe(9)
         conn.execute(
             """
             INSERT OR REPLACE INTO cotizaciones
                 (codigo, jid, nombre, empresa, email, telefono,
-                 tipo_precio, items_json, total, ts)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 tipo_precio, items_json, total, ts, token)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 codigo,
@@ -229,9 +235,26 @@ def guardar_cotizacion(cot: dict) -> str:
                 json.dumps(cot.get("items", []), ensure_ascii=False),
                 int(cot.get("total", 0)),
                 cot.get("ts") or _now(),
+                token,
             ),
         )
         return codigo
+
+
+def get_cotizacion_por_token(token: str) -> dict | None:
+    """Busca una cotización por su token público (link de descarga)."""
+    token = (token or "").strip()
+    if not token:
+        return None
+    with _lock, _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM cotizaciones WHERE token = ?", (token,)
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["items"] = json.loads(d.pop("items_json") or "[]")
+    return d
 
 
 def get_cotizacion(codigo: str) -> dict | None:

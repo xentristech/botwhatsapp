@@ -11,6 +11,7 @@ cotizacion en curso por numero de WhatsApp (jid).
 import json
 import os
 import re
+import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -47,6 +48,15 @@ from agent.db import (
 load_dotenv()
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+# ── Cotización por link (conversión Google Ads) ──────────────────────────
+# Página estática "solicitud enviada" en platim.co: al abrirla dispara la
+# conversión de Google Ads. Recibe ?c=<token> y muestra/descarga el PDF.
+COTIZACION_LANDING = os.getenv(
+    "COTIZACION_LANDING", "https://www.platim.co/solicitud-enviada"
+)
+# Base pública del bot que sirve el PDF/JSON de cada cotización por token.
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.platim.co").rstrip("/")
 
 # ── Agenda de la asesora Patricia ────────────────────────────────────────
 ASESORA = "Patricia"
@@ -447,9 +457,17 @@ def registrar_datos_cliente(
 @function_tool
 async def generar_y_enviar_cotizacion(
     ctx: RunContextWrapper[PlatimContext],
+    enviar_pdf_directo: bool = False,
 ) -> str:
-    """ACCION FINAL: genera el PDF, lo envia por WhatsApp como documento
-    y envia email con PDF adjunto.
+    """ACCION FINAL: genera el PDF y lo pone a disposición del cliente.
+    Por defecto envía por WhatsApp un BOTÓN con el link a la página donde el
+    cliente ve y descarga su cotización (esto es lo normal). El email interno
+    siempre sale con el PDF adjunto.
+
+    enviar_pdf_directo: pásalo True SOLO si el cliente pide explícitamente que
+    le mandes el ARCHIVO/PDF por WhatsApp; en ese caso además del link se le
+    manda el documento PDF. Normalmente déjalo en False.
+
     Solo llamar cuando el cliente confirme y tenga datos de contacto
     (al menos nombre y email o telefono)."""
     jid = ctx.context.jid
@@ -467,6 +485,7 @@ async def generar_y_enviar_cotizacion(
     total = sum(i["subtotal"] for i in items)
     tipo_precio = estado.get("tipo_precio", "publico")
     ts = _now()
+    token = secrets.token_urlsafe(9)  # link público único por cliente
 
     # Guardar cotizacion en DB (genera el codigo).
     codigo = guardar_cotizacion(
@@ -480,6 +499,7 @@ async def generar_y_enviar_cotizacion(
             "items": items,
             "total": total,
             "ts": ts,
+            "token": token,
         }
     )
 
@@ -493,35 +513,60 @@ async def generar_y_enviar_cotizacion(
         "items": items,
         "total": total,
         "ts": ts,
+        "token": token,
     }
 
-    # 1. Generar PDF.
+    # 1. Generar PDF (siempre: para el email y por si el cliente pide el archivo).
     from agent.pdf_service import generar_pdf_cotizacion
 
     pdf_bytes = generar_pdf_cotizacion(cot_data)
 
-    # 2. Enviar por WhatsApp (subir media + enviar documento).
+    # 2. Enviar por WhatsApp el LINK a la página de "solicitud enviada".
+    #    Al abrirla se dispara la conversión de Google Ads y desde ahí el
+    #    cliente ve y descarga su cotización (por token). Este es el flujo normal.
+    link = f"{COTIZACION_LANDING}?cot={token}"
+    primer_nombre = (cliente.get("nombre", "") or "").split(" ")[0]
     wa_ok = False
     try:
-        from agent.whatsapp import send_document, send_text, upload_media
+        from agent.whatsapp import send_cta_button
 
-        media_id = await upload_media(pdf_bytes, f"Cotizacion_{codigo}.pdf")
-        caption = (
-            f"Cotización PLATIM {codigo}\n"
-            f"Total: {_moneda(total)} COP\nVigencia: 30 días"
+        cuerpo = (
+            f"¡Listo{(' ' + primer_nombre) if primer_nombre else ''}! 🎉 "
+            f"Tu cotización *{codigo}* por {_moneda(total)} COP ya está lista.\n"
+            f"Ábrela y descárgala en el siguiente botón 👇 (vigencia 30 días)"
         )
-        await send_document(
-            jid, media_id, f"Cotizacion_PLATIM_{codigo}.pdf", caption
-        )
+        await send_cta_button(jid, cuerpo, "Ver mi cotización 📄", link)
         wa_ok = True
     except Exception as e:  # noqa: BLE001
-        print(f"Error enviando PDF WA: {e}")
+        print(f"Error enviando link cotización WA: {e}")
         try:
             from agent.whatsapp import send_text
 
-            await send_text(jid, _formato_texto_cotizacion(items, total, codigo))
+            await send_text(
+                jid,
+                f"¡Listo! Tu cotización {codigo} por {_moneda(total)} COP: {link}",
+            )
+            wa_ok = True
         except Exception as e2:  # noqa: BLE001
             print(f"Error enviando fallback texto: {e2}")
+
+    # 2b. Solo si el cliente pidió el ARCHIVO: además mandar el PDF adjunto.
+    pdf_directo_ok = False
+    if enviar_pdf_directo:
+        try:
+            from agent.whatsapp import send_document, upload_media
+
+            media_id = await upload_media(pdf_bytes, f"Cotizacion_{codigo}.pdf")
+            caption = (
+                f"Cotización PLATIM {codigo}\n"
+                f"Total: {_moneda(total)} COP\nVigencia: 30 días"
+            )
+            await send_document(
+                jid, media_id, f"Cotizacion_PLATIM_{codigo}.pdf", caption
+            )
+            pdf_directo_ok = True
+        except Exception as e:  # noqa: BLE001
+            print(f"Error enviando PDF directo WA: {e}")
 
     # 3. Enviar email con PDF adjunto.
     email_ok = False
@@ -552,7 +597,9 @@ async def generar_y_enviar_cotizacion(
         "ok": True,
         "codigo": codigo,
         "total": total,
-        "pdf_whatsapp": wa_ok,
+        "link_enviado": wa_ok,
+        "link": link,
+        "pdf_directo_enviado": pdf_directo_ok,
         "email_enviado": email_ok,
     }
     if not email_ok and email_error:
@@ -916,6 +963,14 @@ REGLAS:
   su correo no es válido o no está activo y pídele que lo escriba de nuevo; el
   resto de la cotización (WhatsApp) sí se envió
 - Solo usa generar_y_enviar_cotizacion cuando el cliente lo confirme
+- ENVÍO DE LA COTIZACIÓN: por defecto el bot le manda al cliente un BOTÓN con el
+  link donde ve y descarga su cotización (NO mandes el PDF por defecto). Después
+  de llamar generar_y_enviar_cotizacion, dile algo como "Te acabo de enviar el
+  botón para ver y descargar tu cotización 👆". NO pegues tú el link en el texto:
+  el botón ya se envió solo.
+- Solo si el cliente pide EXPLÍCITAMENTE el archivo/PDF ("mándame el PDF",
+  "quiero el archivo", "envíame el documento"), llama generar_y_enviar_cotizacion
+  con enviar_pdf_directo=true para que además le llegue el PDF adjunto.
 - PAGOS: si el cliente dice que quiere PAGAR, PRIMERO verifica con
   ver_cotizacion_actual que la cotización tenga TODOS los productos y el total
   correcto; luego usa generar_link_pago para enviarle el botón de pago (Mercado

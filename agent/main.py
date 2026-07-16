@@ -33,6 +33,7 @@ from agent.db import (
     crear_producto,
     es_modo_humano,
     existe_producto_codigo,
+    get_cotizacion_por_token,
     marcar_seguimiento,
     listar_citas,
     listar_conversaciones,
@@ -88,8 +89,11 @@ async def _auth_dashboard(request: Request, call_next):
             )
     return await call_next(request)
 
-# Cola de eventos para el dashboard (SSE).
-_event_queue: "asyncio.Queue[dict]" = asyncio.Queue()
+# Suscriptores SSE del dashboard: cada conexion (pestaña) tiene su PROPIA cola.
+# Un evento se difunde (broadcast) a todas. Antes había una sola cola compartida
+# y los eventos se repartían al azar entre conexiones/generadores huérfanos, por
+# eso el dashboard no actualizaba en tiempo real y tocaba refrescar a mano.
+_suscriptores: "set[asyncio.Queue[dict]]" = set()
 
 # Evita procesar dos veces el mismo mensaje (Meta reintenta).
 _mensajes_vistos: set[str] = set()
@@ -116,8 +120,10 @@ DASHBOARD_HTML = os.path.join(BASE_DIR, "dashboard", "index.html")
 
 
 async def _publicar_evento(tipo: str, data: dict) -> None:
-    with suppress(Exception):
-        await _event_queue.put({"tipo": tipo, "data": data})
+    evento = {"tipo": tipo, "data": data}
+    for q in list(_suscriptores):
+        with suppress(Exception):
+            q.put_nowait(evento)
 
 
 # ── Healthcheck ──────────────────────────────────────────────────────────
@@ -125,6 +131,50 @@ async def _publicar_evento(tipo: str, data: dict) -> None:
 @app.get("/")
 async def root():
     return {"status": "ok", "servicio": "PLATIM Agent"}
+
+
+# ── Cotización por token (link público de la página "solicitud enviada") ──
+# La página estática de platim.co lee ?c=<token> y llama a estos endpoints.
+# Son PÚBLICOS (no pasan por el Basic Auth): el token aleatorio es la seguridad.
+
+_CORS = {"Access-Control-Allow-Origin": "*"}
+
+
+@app.get("/cot/{token}/info")
+async def cot_info(token: str):
+    """Devuelve datos mínimos para personalizar la página (nombre, código, total)."""
+    cot = get_cotizacion_por_token(token)
+    if not cot:
+        return JSONResponse({"error": "no_encontrada"}, status_code=404, headers=_CORS)
+    return JSONResponse(
+        {
+            "nombre": cot.get("nombre", ""),
+            "codigo": cot.get("codigo", ""),
+            "total": cot.get("total", 0),
+            "estado_pago": cot.get("estado_pago", "pendiente"),
+        },
+        headers=_CORS,
+    )
+
+
+@app.get("/cot/{token}")
+async def cot_pdf(token: str):
+    """Sirve el PDF de la cotización de ese cliente (regenerado desde la DB)."""
+    cot = get_cotizacion_por_token(token)
+    if not cot:
+        return JSONResponse({"error": "no_encontrada"}, status_code=404, headers=_CORS)
+    from agent.pdf_service import generar_pdf_cotizacion
+
+    pdf_bytes = generar_pdf_cotizacion(cot)
+    nombre_archivo = f"Cotizacion_PLATIM_{cot.get('codigo', 'PLATIM')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{nombre_archivo}"',
+            **_CORS,
+        },
+    )
 
 
 async def _bucle_seguimiento() -> None:
@@ -573,18 +623,27 @@ async def api_etiqueta(body: EtiquetaBody):
 
 @app.get("/api/stream")
 async def api_stream(request: Request):
-    async def generador():
-        while True:
-            if await request.is_disconnected():
-                break
-            try:
-                evento = await asyncio.wait_for(_event_queue.get(), timeout=15)
-                yield {"event": evento["tipo"], "data": json.dumps(evento["data"], ensure_ascii=False)}
-            except asyncio.TimeoutError:
-                # Keepalive para mantener viva la conexion SSE.
-                yield {"event": "ping", "data": "{}"}
+    cola: "asyncio.Queue[dict]" = asyncio.Queue()
+    _suscriptores.add(cola)
 
-    return EventSourceResponse(generador())
+    async def generador():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    evento = await asyncio.wait_for(cola.get(), timeout=15)
+                    yield {"event": evento["tipo"], "data": json.dumps(evento["data"], ensure_ascii=False)}
+                except asyncio.TimeoutError:
+                    # Keepalive para mantener viva la conexion SSE.
+                    yield {"event": "ping", "data": "{}"}
+        finally:
+            _suscriptores.discard(cola)
+
+    return EventSourceResponse(
+        generador(),
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 # ── Dashboard UI ─────────────────────────────────────────────────────────
