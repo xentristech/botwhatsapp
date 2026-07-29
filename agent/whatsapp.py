@@ -41,32 +41,40 @@ def _normalizar_numero(to: str) -> str:
     return numero
 
 
-async def send_text(to: str, texto: str) -> dict:
-    """Envia un mensaje de texto por WhatsApp."""
-    numero = _normalizar_numero(to)
+async def _post_mensaje(payload: dict) -> dict:
+    """Envía un payload a /messages. Si Meta responde error, lo REGISTRA con su
+    detalle (código/motivo) antes de relanzar, para que no pase desapercibido."""
     url = f"{BASE_URL}/messages"
-    payload = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": numero,
-        "type": "text",
-        "text": {"preview_url": False, "body": texto},
-    }
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(url, json=payload, headers=HEADERS)
+        if r.status_code >= 400:
+            tipo = payload.get("type", "?")
+            print(
+                f"[whatsapp] ERROR {r.status_code} al enviar '{tipo}' a "
+                f"{payload.get('to')}: {r.text}"
+            )
         r.raise_for_status()
         return r.json()
+
+
+async def send_text(to: str, texto: str) -> dict:
+    """Envia un mensaje de texto por WhatsApp."""
+    return await _post_mensaje({
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": _normalizar_numero(to),
+        "type": "text",
+        "text": {"preview_url": False, "body": texto},
+    })
 
 
 async def send_cta_button(to: str, cuerpo: str, boton_texto: str, url: str) -> dict:
     """Envia un mensaje interactivo con un botón que abre una URL (CTA).
     Ideal para el botón 'Pagar' con el link de Mercado Pago."""
-    numero = _normalizar_numero(to)
-    endpoint = f"{BASE_URL}/messages"
-    payload = {
+    return await _post_mensaje({
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
-        "to": numero,
+        "to": _normalizar_numero(to),
         "type": "interactive",
         "interactive": {
             "type": "cta_url",
@@ -76,11 +84,7 @@ async def send_cta_button(to: str, cuerpo: str, boton_texto: str, url: str) -> d
                 "parameters": {"display_text": boton_texto[:20], "url": url},
             },
         },
-    }
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(endpoint, json=payload, headers=HEADERS)
-        r.raise_for_status()
-        return r.json()
+    })
 
 
 async def upload_media(
@@ -122,59 +126,41 @@ async def download_media(media_url: str) -> bytes:
 async def send_image(to: str, link: str, caption: str = "") -> dict:
     """Envia una imagen por WhatsApp usando un enlace PÚBLICO (Meta lo descarga).
     La URL debe ser HTTPS y accesible; formato JPG/PNG."""
-    numero = _normalizar_numero(to)
-    url = f"{BASE_URL}/messages"
     imagen: dict = {"link": link}
     if caption:
         imagen["caption"] = caption
-    payload = {
+    return await _post_mensaje({
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
-        "to": numero,
+        "to": _normalizar_numero(to),
         "type": "image",
         "image": imagen,
-    }
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(url, json=payload, headers=HEADERS)
-        r.raise_for_status()
-        return r.json()
+    })
 
 
 async def send_audio(to: str, media_id: str) -> dict:
     """Envia una nota de voz / audio (ya subido) por WhatsApp."""
-    numero = _normalizar_numero(to)
-    url = f"{BASE_URL}/messages"
-    payload = {
+    return await _post_mensaje({
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
-        "to": numero,
+        "to": _normalizar_numero(to),
         "type": "audio",
         "audio": {"id": media_id},
-    }
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(url, json=payload, headers=HEADERS)
-        r.raise_for_status()
-        return r.json()
+    })
 
 
 async def send_document(
     to: str, media_id: str, filename: str, caption: str = ""
 ) -> dict:
     """Envia un documento PDF (ya subido) por WhatsApp."""
-    numero = _normalizar_numero(to)
-    url = f"{BASE_URL}/messages"
-    payload = {
+    return await _post_mensaje({
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
-        "to": numero,
+        "to": _normalizar_numero(to),
         "type": "document",
         "document": {
             "id": media_id,
             "filename": filename,
             "caption": caption,
         },
-    }
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(url, json=payload, headers=HEADERS)
-        r.raise_for_status()
-        return r.json()
+    })
