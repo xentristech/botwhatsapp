@@ -149,10 +149,12 @@ def buscar(query: str = "", categoria: str = "",
     tokens = [t for t in _norm(query).split() if t and t not in _STOPWORDS]
     cat = _norm(categoria)
     overrides = _overrides()
+    fotos = _fotos()
 
     candidatos = []  # (score, indice, producto)
     for idx, p0 in enumerate(catalogo_completo()):
         p = _aplicar(p0, overrides)
+        p["tiene_foto"] = p["codigo"] in fotos
         if not incluir_sin_stock and p.get("sin_stock"):
             continue
         if cat and cat not in _norm(p["categoria"]):
@@ -199,6 +201,15 @@ def _aplicar(p: dict, overrides: dict) -> dict:
     return {**p, **ov} if ov else p
 
 
+def _fotos() -> dict:
+    """Fotos cargadas desde el dashboard {codigo: archivo} (import perezoso)."""
+    try:
+        from agent import db
+        return db.get_fotos()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _productos_nuevos() -> list[dict]:
     """Productos creados desde el dashboard (import perezoso)."""
     try:
@@ -217,9 +228,12 @@ def obtener(codigo: str) -> dict | None:
     """Devuelve un producto por su codigo exacto (con ajustes aplicados), o None."""
     codigo = (codigo or "").strip().upper()
     overrides = _overrides()
+    fotos = _fotos()
     for p in catalogo_completo():
         if p["codigo"] == codigo:
-            return _aplicar(p, overrides)
+            r = _aplicar(p, overrides)
+            r["tiene_foto"] = codigo in fotos
+            return r
     return None
 
 

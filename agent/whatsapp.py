@@ -119,6 +119,27 @@ async def download_media(media_url: str) -> bytes:
         return r.content
 
 
+async def send_image(to: str, link: str, caption: str = "") -> dict:
+    """Envia una imagen por WhatsApp usando un enlace PÚBLICO (Meta lo descarga).
+    La URL debe ser HTTPS y accesible; formato JPG/PNG."""
+    numero = _normalizar_numero(to)
+    url = f"{BASE_URL}/messages"
+    imagen: dict = {"link": link}
+    if caption:
+        imagen["caption"] = caption
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": numero,
+        "type": "image",
+        "image": imagen,
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(url, json=payload, headers=HEADERS)
+        r.raise_for_status()
+        return r.json()
+
+
 async def send_audio(to: str, media_id: str) -> dict:
     """Envia una nota de voz / audio (ya subido) por WhatsApp."""
     numero = _normalizar_numero(to)

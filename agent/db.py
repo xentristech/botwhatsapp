@@ -125,6 +125,12 @@ def init_db() -> None:
                 observaciones  TEXT,
                 creado         TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS producto_foto (
+                codigo      TEXT PRIMARY KEY,
+                archivo     TEXT,
+                actualizado TEXT
+            );
             """
         )
         # Columna 'origen' en mensajes (cliente | bot | humano) — migracion suave.
@@ -717,6 +723,47 @@ def existe_producto_codigo(codigo: str) -> bool:
             "SELECT 1 FROM producto_nuevo WHERE codigo = ?", (codigo,)
         ).fetchone()
         return bool(r)
+
+
+# ── FOTOS DE PRODUCTOS (cargadas desde el dashboard) ─────────────────────
+
+def get_fotos() -> dict:
+    """Devuelve {codigo: archivo} de los productos que tienen foto."""
+    with _lock, _conn() as conn:
+        rows = conn.execute("SELECT codigo, archivo FROM producto_foto").fetchall()
+    return {r["codigo"]: r["archivo"] for r in rows if r["archivo"]}
+
+
+def get_foto(codigo: str) -> str | None:
+    """Devuelve el nombre de archivo de la foto de un producto, o None."""
+    codigo = (codigo or "").strip().upper()
+    with _lock, _conn() as conn:
+        r = conn.execute(
+            "SELECT archivo FROM producto_foto WHERE codigo = ?", (codigo,)
+        ).fetchone()
+    return r["archivo"] if r else None
+
+
+def set_foto(codigo: str, archivo: str) -> None:
+    """Registra/actualiza el archivo de foto de un producto."""
+    codigo = (codigo or "").strip().upper()
+    with _lock, _conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO producto_foto (codigo, archivo, actualizado) "
+            "VALUES (?, ?, ?)",
+            (codigo, archivo, _now()),
+        )
+
+
+def borrar_foto(codigo: str) -> str | None:
+    """Elimina el registro de foto y devuelve el archivo que tenía (o None)."""
+    codigo = (codigo or "").strip().upper()
+    with _lock, _conn() as conn:
+        r = conn.execute(
+            "SELECT archivo FROM producto_foto WHERE codigo = ?", (codigo,)
+        ).fetchone()
+        conn.execute("DELETE FROM producto_foto WHERE codigo = ?", (codigo,))
+    return r["archivo"] if r else None
 
 
 def crear_producto(campos: dict) -> str:

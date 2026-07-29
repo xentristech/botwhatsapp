@@ -58,6 +58,11 @@ COTIZACION_LANDING = os.getenv(
 )
 # Base pública del bot que sirve el PDF/JSON de cada cotización por token.
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api.platim.co").rstrip("/")
+# Base pública REAL desde donde WhatsApp descarga las fotos de producto
+# (debe ser HTTPS y resolver: por defecto la URL sslip.io del VPS).
+PUBLIC_BASE_URL = os.getenv(
+    "PUBLIC_BASE_URL", "https://157-137-224-141.sslip.io"
+).rstrip("/")
 
 # ── Agenda de la asesora Patricia ────────────────────────────────────────
 ASESORA = "Patricia"
@@ -247,12 +252,46 @@ def buscar_productos(
                 "marca": p["marca"],
                 "precio": catalogo.precio_de(p, es_mayorista),
                 "observaciones": p["observaciones"],
+                "tiene_foto": bool(p.get("tiene_foto")),
             }
         )
     return json.dumps(
         {"encontrados": len(salida), "tipo_precio": estado["tipo_precio"],
          "productos": salida},
         ensure_ascii=False,
+    )
+
+
+@function_tool
+async def enviar_fotos_productos(
+    ctx: RunContextWrapper[PlatimContext], codigos: list[str]
+) -> str:
+    """Envía por WhatsApp la FOTO de uno o varios productos (con su nombre y
+    precio como pie de foto). Úsalo SOLO con productos cuyo buscar_productos
+    marque "tiene_foto": true. Ideal al recomendar o al mostrar la cotización
+    para que el cliente vea el producto. Ignora los que no tengan foto."""
+    jid = ctx.context.jid
+    estado = get_estado(jid)
+    es_mayorista = estado.get("tipo_precio") == "mayoreo"
+    enviadas, sin_foto = [], []
+    from agent.whatsapp import send_image
+
+    for cod in codigos:
+        p = catalogo.obtener(cod)
+        if not p or not p.get("tiene_foto"):
+            sin_foto.append(cod)
+            continue
+        precio = catalogo.precio_de(p, es_mayorista)
+        caption = f"*{p['nombre']}* — ${precio:,.0f} COP".replace(",", ".")
+        link = f"{PUBLIC_BASE_URL}/fotos/{p['codigo']}"
+        try:
+            await send_image(jid, link, caption)
+            enviadas.append(p["codigo"])
+        except Exception as e:  # noqa: BLE001
+            print(f"Error enviando foto {cod}: {e}")
+            sin_foto.append(cod)
+    return json.dumps(
+        {"enviadas": enviadas, "sin_foto": sin_foto}, ensure_ascii=False
     )
 
 
@@ -1017,6 +1056,10 @@ REGLAS:
   eléctricas de una marca específica), NO lo inventes: dile con amabilidad que no
   lo tienes listado, ofrece alternativas del catálogo si aplican, o pásalo con un
   agente humano.
+- FOTOS: si buscar_productos marca "tiene_foto": true en un producto, envíasela
+  al cliente con enviar_fotos_productos (pásale los códigos). Hazlo cuando
+  RECOMIENDES ese producto y también al mostrar el RESUMEN de la cotización, para
+  que vea lo que va a comprar. No envíes fotos de productos sin foto (no las hay).
 - Si el cliente pide la LISTA o el CATÁLOGO completo, usa enviar_catalogo_pdf
   para mandarle el PDF con todos los productos
 - Cuando el cliente confirme cantidad de un producto, usa agregar_item_cotizacion
@@ -1143,6 +1186,7 @@ platim_agent = Agent[PlatimContext](
     model=MODEL,
     tools=[
         buscar_productos,
+        enviar_fotos_productos,
         comparar_productos,
         enviar_catalogo_pdf,
         agregar_item_cotizacion,

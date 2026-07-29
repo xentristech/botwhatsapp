@@ -463,6 +463,18 @@
             <button onclick="guardarProducto('${esc(p.codigo)}', this)">Guardar</button>
             <span class="ok"></span>
           </div>
+          <div class="pfoto" style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
+            ${p.tiene_foto
+              ? `<img src="/fotos/${esc(p.codigo)}?t=${Date.now()}" style="width:46px;height:46px;object-fit:cover;border-radius:6px;border:1px solid #ccc;">`
+              : `<span style="font-size:12px;color:#888;">Sin foto</span>`}
+            <label style="cursor:pointer;font-size:12px;background:#eef;border:1px solid #99f;border-radius:6px;padding:4px 9px;">
+              📷 ${p.tiene_foto ? "Cambiar" : "Subir"} foto
+              <input type="file" accept="image/*" style="display:none" onchange="subirFoto('${esc(p.codigo)}', this)"></label>
+            ${p.tiene_foto
+              ? `<button onclick="quitarFoto('${esc(p.codigo)}')" style="font-size:12px;color:#c62828;background:none;border:none;cursor:pointer;">Quitar</button>`
+              : ""}
+            <span class="fok" style="font-size:12px;color:#2e7d32;"></span>
+          </div>
         </div>`).join("");
     } catch (e) { cont.innerHTML = '<div class="vacio">Error cargando productos.</div>'; }
   }
@@ -513,6 +525,27 @@
       if (r.ok) cargarProductos();
     } catch (e) { okSpan.textContent = "✕ error"; }
     setTimeout(() => { okSpan.textContent = ""; }, 2500);
+  }
+
+  async function subirFoto(codigo, input) {
+    const file = input.files[0];
+    if (!file) return;
+    const okSpan = input.closest(".prod-row").querySelector(".fok");
+    okSpan.textContent = "subiendo…"; okSpan.style.color = "#2e7d32";
+    const fd = new FormData(); fd.append("archivo", file);
+    try {
+      const r = await fetch(`/api/producto/${encodeURIComponent(codigo)}/foto`,
+        { method: "POST", body: fd }).then(r => r.json());
+      if (r.ok) { okSpan.textContent = "✓ Foto lista"; cargarProductos(); }
+      else { okSpan.style.color = "#c62828"; okSpan.textContent = "✕ " + (r.error || "error"); }
+    } catch (e) { okSpan.style.color = "#c62828"; okSpan.textContent = "✕ error de red"; }
+    setTimeout(() => { okSpan.textContent = ""; }, 3500);
+  }
+  async function quitarFoto(codigo) {
+    try {
+      await fetch(`/api/producto/${encodeURIComponent(codigo)}/foto`, { method: "DELETE" });
+      cargarProductos();
+    } catch (e) {}
   }
 
   function descargarExcel() { window.location.href = "/api/productos/export"; }
