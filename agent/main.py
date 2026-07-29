@@ -124,7 +124,6 @@ DASHBOARD_HTML = os.path.join(BASE_DIR, "dashboard", "index.html")
 # Carpeta de fotos de producto (en el volumen 'data', persiste entre despliegues).
 FOTOS_DIR = os.path.join(BASE_DIR, "data", "fotos")
 os.makedirs(FOTOS_DIR, exist_ok=True)
-_EXT_IMAGEN = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 MAX_FOTO_BYTES = 5 * 1024 * 1024  # 5 MB (límite de WhatsApp para imágenes)
 
 
@@ -719,31 +718,59 @@ async def servir_foto(codigo: str):
 
 @app.post("/api/producto/{codigo}/foto")
 async def api_subir_foto(codigo: str, archivo: UploadFile = File(...)):
-    """Carga/reemplaza la foto de un producto desde el dashboard."""
+    """Carga/reemplaza la foto de un producto desde el dashboard.
+    SIEMPRE convierte a JPEG: WhatsApp solo entrega imágenes JPG/PNG (el WEBP lo
+    descarta en silencio), así que normalizamos todo a JPG."""
     codigo = (codigo or "").strip().upper()
     if not codigo or not catalogo.obtener(codigo):
         return JSONResponse({"error": "Código de producto inválido"}, status_code=400)
-    mime = (archivo.content_type or "").lower()
-    ext = _EXT_IMAGEN.get(mime)
-    if not ext:
-        return JSONResponse(
-            {"error": "Formato no válido. Usa JPG, PNG o WEBP."}, status_code=400
-        )
     contenido = await archivo.read()
     if len(contenido) > MAX_FOTO_BYTES:
         return JSONResponse(
             {"error": "La imagen es muy grande (máx 5 MB)."}, status_code=400
         )
-    # Borrar cualquier foto anterior (por si cambia la extensión).
+    jpeg = _a_jpeg(contenido)
+    if jpeg is None:
+        return JSONResponse(
+            {"error": "No pude procesar la imagen. Usa una foto JPG o PNG."},
+            status_code=400,
+        )
+    # Borrar cualquier foto anterior (por si tenía otra extensión).
     anterior = get_foto(codigo)
     if anterior:
         with suppress(Exception):
             os.remove(os.path.join(FOTOS_DIR, anterior))
-    nombre = f"{codigo}{ext}"
+    nombre = f"{codigo}.jpg"
     with open(os.path.join(FOTOS_DIR, nombre), "wb") as f:
-        f.write(contenido)
+        f.write(jpeg)
     set_foto(codigo, nombre)
     return {"ok": True, "codigo": codigo, "url": f"/fotos/{codigo}"}
+
+
+def _a_jpeg(contenido: bytes) -> bytes | None:
+    """Convierte cualquier imagen (JPG/PNG/WEBP/…) a JPEG RGB compatible con
+    WhatsApp. Aplana transparencias sobre blanco y limita el tamaño. None si falla."""
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        img = Image.open(BytesIO(contenido))
+        img.load()
+        if img.mode in ("RGBA", "LA", "P"):
+            fondo = Image.new("RGB", img.size, (255, 255, 255))
+            img = img.convert("RGBA")
+            fondo.paste(img, mask=img.split()[-1])
+            img = fondo
+        else:
+            img = img.convert("RGB")
+        img.thumbnail((1600, 1600))
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
+    except Exception as e:  # noqa: BLE001
+        print(f"Error convirtiendo imagen a JPEG: {e}")
+        return None
 
 
 @app.delete("/api/producto/{codigo}/foto")

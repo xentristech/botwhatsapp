@@ -10,3 +10,4 @@ aiosmtplib>=3.0.0
 sse-starlette>=2.1.0
 reportlab>=4.0.0
 dnspython>=2.6.0
+Pillow>=10.0.0

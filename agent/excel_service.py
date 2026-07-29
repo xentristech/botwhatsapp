@@ -6,10 +6,16 @@ Exportar/importar el catálogo de productos en Excel (.xlsx) con openpyxl.
 """
 
 import io
+import os
 
 from openpyxl import Workbook, load_workbook
 
 from agent import catalogo, db
+
+# Base pública para armar el enlace a la foto de cada producto en el Excel.
+PUBLIC_BASE_URL = os.getenv(
+    "PUBLIC_BASE_URL", "https://157-137-224-141.sslip.io"
+).rstrip("/")
 
 # Orden y encabezados de las columnas del Excel.
 COLUMNAS = [
@@ -43,7 +49,7 @@ def exportar_xlsx() -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Productos"
-    ws.append([ENCABEZADOS[c] for c in COLUMNAS])
+    ws.append([ENCABEZADOS[c] for c in COLUMNAS] + ["Foto (URL)"])
     for p in prods:
         fila = []
         for c in COLUMNAS:
@@ -51,10 +57,12 @@ def exportar_xlsx() -> bytes:
                 fila.append("SI" if p.get("sin_stock") else "")
             else:
                 fila.append(p.get(c, ""))
-        ws.append(fila)
-    # Anchos legibles.
-    for i, _ in enumerate(COLUMNAS, start=1):
-        ws.column_dimensions[chr(64 + i)].width = 20
+        url_foto = f"{PUBLIC_BASE_URL}/fotos/{p['codigo']}" if p.get("tiene_foto") else ""
+        ws.append(fila + [url_foto])
+    # Anchos legibles (columnas + la de foto).
+    for i in range(1, len(COLUMNAS) + 2):
+        col = ws.cell(row=1, column=i).column_letter
+        ws.column_dimensions[col].width = 34 if i == len(COLUMNAS) + 1 else 20
     ws.freeze_panes = "A2"
 
     buf = io.BytesIO()
