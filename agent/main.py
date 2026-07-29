@@ -267,6 +267,11 @@ async def _procesar_mensaje_entrante(msg: dict, value: dict) -> None:
             or inter.get("list_reply", {}).get("title")
             or ""
         )
+    elif tipo in ("image", "document"):
+        # Imágenes y PDF llevan su propio flujo (visión/lectura) y responden ya.
+        if jid:
+            await _procesar_media(msg, jid, tipo)
+        return
     else:
         texto = ""
 
@@ -322,13 +327,18 @@ async def _procesar_con_espera(jid: str) -> None:
     await _ejecutar_bot(jid, " ".join(textos), es_audio=False)
 
 
-async def _ejecutar_bot(jid: str, texto: str, es_audio: bool = False) -> None:
+async def _ejecutar_bot(
+    jid: str, texto: str, es_audio: bool = False, adjuntos: list | None = None
+) -> None:
     """Corre el agente y envía la respuesta (texto + voz si aplica).
-    No registra el 'in' (ya se registró al recibir cada mensaje)."""
+    No registra el 'in' (ya se registró al recibir cada mensaje).
+    adjuntos: items multimodales (imagen/PDF) para visión/lectura."""
     from agent.whatsapp import send_text
 
     try:
-        respuesta = await procesar_mensaje(jid, texto, registrar_in=False)
+        respuesta = await procesar_mensaje(
+            jid, texto, registrar_in=False, adjuntos=adjuntos
+        )
     except Exception as e:  # noqa: BLE001
         print(f"Error en agente: {e}")
         with suppress(Exception):
@@ -345,6 +355,85 @@ async def _ejecutar_bot(jid: str, texto: str, es_audio: bool = False) -> None:
         if es_audio:
             await _responder_con_audio(jid, respuesta)
         await _publicar_evento("mensaje_out", {"jid": jid, "texto": respuesta})
+
+
+async def _procesar_media(msg: dict, jid: str, tipo: str) -> None:
+    """Descarga una imagen o PDF entrante y deja que el agente lo vea/lea.
+
+    Solo procesa imágenes y PDF (lo que el modelo puede interpretar). Otros
+    documentos (docx, xlsx, etc.) reciben un mensaje pidiendo foto o PDF.
+    """
+    from agent.whatsapp import download_media, get_media_url, send_text
+
+    info = msg.get("image" if tipo == "image" else "document", {})
+    media_id = info.get("id", "")
+    caption = (info.get("caption") or "").strip()
+    mime = info.get("mime_type", "") or ""
+    filename = info.get("filename", "documento")
+    if not media_id:
+        return
+
+    # Descargar los bytes del media.
+    try:
+        media_url = await get_media_url(media_id)
+        data = await download_media(media_url)
+    except Exception as e:  # noqa: BLE001
+        print(f"Error descargando media: {e}")
+        with suppress(Exception):
+            await send_text(
+                jid, "No pude abrir tu archivo 😅. ¿Puedes reenviármelo?"
+            )
+        return
+
+    from agent.vision_service import MAX_BYTES, item_documento, item_imagen
+
+    es_pdf = tipo == "document" and (
+        mime == "application/pdf" or filename.lower().endswith(".pdf")
+    )
+    es_img = tipo == "image" or mime.startswith("image/")
+
+    if not (es_pdf or es_img):
+        with suppress(Exception):
+            await send_text(
+                jid,
+                "Por ahora puedo leer imágenes 📷 y archivos PDF 📄. "
+                "¿Me lo reenvías en ese formato?",
+            )
+        return
+
+    if len(data) > MAX_BYTES:
+        with suppress(Exception):
+            await send_text(
+                jid,
+                "Ese archivo es muy grande 😅. ¿Puedes enviarme uno más liviano "
+                "o una foto?",
+            )
+        return
+
+    if es_pdf:
+        adjunto = item_documento(data, filename, "application/pdf")
+        texto_registro = f"📄 {filename}" + (f" — {caption}" if caption else "")
+        texto_modelo = caption or (
+            "El cliente envió un PDF. Léelo, resume lo que entiendas "
+            "(productos y cantidades si aplica) y ayúdalo con su requerimiento."
+        )
+    else:
+        adjunto = item_imagen(data, mime or "image/jpeg")
+        texto_registro = "📷 Imagen" + (f" — {caption}" if caption else "")
+        texto_modelo = caption or (
+            "El cliente envió una imagen. Analízala, describe lo que ves "
+            "y ayúdalo según lo que necesite."
+        )
+
+    # Registrar el entrante (dashboard/historial) y avisar en vivo.
+    registrar_mensaje(jid, "in", texto_registro, "cliente")
+    await _publicar_evento("mensaje_in", {"jid": jid, "texto": texto_registro})
+
+    # Si un humano tomó el control, el bot NO responde.
+    if es_modo_humano(jid):
+        return
+
+    await _ejecutar_bot(jid, texto_modelo, adjuntos=[adjunto])
 
 
 async def _transcribir_nota_voz(msg: dict) -> str:

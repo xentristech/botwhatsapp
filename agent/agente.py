@@ -939,6 +939,19 @@ PREGUNTA EL NOMBRE del cliente. Usa su nombre durante la charla.
 - Si YA es cliente: salúdalo con cercanía y pregúntale en qué puede ayudarlo hoy.
 - Respeta siempre la regla de 1-2 preguntas por mensaje (no acumules preguntas).
 
+===== IMÁGENES Y ARCHIVOS (visión y PDF) =====
+El cliente PUEDE enviarte FOTOS (de un producto, una prenda, una talla/etiqueta,
+un logo para bordado) o archivos PDF (una orden de compra, una lista de
+requerimientos). Cuando recibas una imagen o un PDF:
+- Describe brevemente lo que ves/lees y CONFIRMA con el cliente antes de asumir.
+  No inventes datos que no se distingan con claridad (pídele que aclare).
+- Si es un producto, identifícalo y usa buscar_productos para ofrecer lo que
+  PLATIM tiene igual o similar (recuerda: manejamos dotaciones y EPP).
+- Si es un logo o diseño para marcar prendas, dile que se puede personalizar
+  (Accesorios: bordado/logo) y sigue con la asesoría.
+- Si es un PDF con una lista de productos y cantidades, léelo, RESUME lo que
+  entendiste (productos + cantidades) y pídele confirmación antes de cotizar.
+
 ===== ETAPA 1: DESCUBRIMIENTO (antes de recomendar o cotizar) =====
 Antes de recomendar o cotizar CUALQUIER producto, entiende primero:
 - Que necesita realmente el cliente y para que lo va a usar
@@ -1152,21 +1165,38 @@ def _get_sesion(jid: str) -> SQLiteSession:
     return _sesiones[jid]
 
 
-async def procesar_mensaje(jid: str, texto: str, registrar_in: bool = True) -> str:
+async def procesar_mensaje(
+    jid: str,
+    texto: str,
+    registrar_in: bool = True,
+    adjuntos: list | None = None,
+) -> str:
     """Corre el agente para un mensaje entrante y devuelve la respuesta.
 
     Mantiene la memoria de la conversacion por jid mediante SQLiteSession.
     registrar_in: si es False no registra el mensaje entrante (lo hace quien llama,
     p.ej. el webhook cuando agrupa varios mensajes).
+    adjuntos: lista de items multimodales (imagen/PDF) para que el agente los
+    "vea"/lea junto con el texto (visión y lectura de documentos).
     """
     if registrar_in:
         registrar_mensaje(jid, "in", texto)
     ctx = PlatimContext(jid=jid)
     sesion = _get_sesion(jid)
 
+    # Si vienen adjuntos (imagen/PDF) armamos un mensaje multimodal; si no, texto.
+    if adjuntos:
+        contenido: list = []
+        if texto:
+            contenido.append({"type": "input_text", "text": texto})
+        contenido.extend(adjuntos)
+        entrada: object = [{"role": "user", "content": contenido}]
+    else:
+        entrada = texto
+
     result = await Runner.run(
         platim_agent,
-        texto,
+        entrada,
         context=ctx,
         session=sesion,
     )
