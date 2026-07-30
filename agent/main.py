@@ -280,6 +280,11 @@ async def _procesar_mensaje_entrante(msg: dict, value: dict) -> None:
         if jid:
             await _procesar_media(msg, jid, tipo)
         return
+    elif tipo in ("video", "sticker", "location", "contacts"):
+        # Formatos que el bot no procesa: avisar qué sí aceptamos.
+        if jid:
+            await _avisar_formato_no_soportado(jid, tipo)
+        return
     else:
         texto = ""
 
@@ -365,6 +370,34 @@ async def _ejecutar_bot(
         await _publicar_evento("mensaje_out", {"jid": jid, "texto": respuesta})
 
 
+async def _avisar_formato_no_soportado(jid: str, tipo: str) -> None:
+    """Avisa al cliente que ese formato no se procesa y lista los que sí."""
+    from agent.whatsapp import send_text
+
+    nombres = {
+        "video": "videos 🎥",
+        "sticker": "stickers",
+        "location": "ubicaciones",
+        "contacts": "contactos",
+    }
+    que_es = nombres.get(tipo, "ese formato")
+    # Registrar en el dashboard qué mandó el cliente.
+    registrar_mensaje(jid, "in", f"[{que_es} — no soportado]", "cliente")
+    await _publicar_evento("mensaje_in", {"jid": jid, "texto": f"[{que_es}]"})
+
+    # Si un humano tomó el control, el bot no responde.
+    if es_modo_humano(jid):
+        return
+
+    with suppress(Exception):
+        await send_text(
+            jid,
+            f"Por ahora no puedo procesar {que_es} 😅. Puedo ayudarte por "
+            "*texto*, *notas de voz* 🎙️, *fotos* 📷 y archivos *PDF* 📄. "
+            "¿Me lo envías en alguno de esos formatos?",
+        )
+
+
 async def _procesar_media(msg: dict, jid: str, tipo: str) -> None:
     """Descarga una imagen o PDF entrante y deja que el agente lo vea/lea.
 
@@ -404,8 +437,9 @@ async def _procesar_media(msg: dict, jid: str, tipo: str) -> None:
         with suppress(Exception):
             await send_text(
                 jid,
-                "Por ahora puedo leer imágenes 📷 y archivos PDF 📄. "
-                "¿Me lo reenvías en ese formato?",
+                "Por ahora no puedo abrir ese archivo 😅. Puedo ayudarte por "
+                "*texto*, *notas de voz* 🎙️, *fotos* 📷 y archivos *PDF* 📄. "
+                "¿Me lo envías en alguno de esos formatos?",
             )
         return
 
