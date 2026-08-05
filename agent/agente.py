@@ -84,6 +84,25 @@ def _numeros_alerta() -> list[str]:
             vistos.add(n)
             salida.append(n)
     return salida
+
+
+# ── Modo administrador por WhatsApp (Patricia + Eathan) ──────────────────
+# Estos números, al escribirle al bot, entran en modo ADMIN (gestionan el
+# catálogo por chat) en vez de ser atendidos como clientes.
+ADMIN_WHATSAPP = os.getenv("ADMIN_WHATSAPP", "573188940939,573003730876")
+
+
+def _solo_digitos(x: str) -> str:
+    return "".join(c for c in (x or "") if c.isdigit())
+
+
+def es_admin(jid: str) -> bool:
+    """True si el número (jid) es un administrador autorizado."""
+    n = _solo_digitos(jid)
+    admins = {_solo_digitos(a) for a in ADMIN_WHATSAPP.split(",") if a.strip()}
+    return bool(n) and n in admins
+
+
 # Franjas de 30 min dentro de 2-4 PM (hora Colombia).
 SLOTS_ASESORA = ["14:00", "14:30", "15:00", "15:30"]
 _HORA_LEGIBLE = {
@@ -344,7 +363,7 @@ async def reportar_producto_no_encontrado(
     from agent.email_service import enviar_alerta_producto
     from agent.whatsapp import send_text
 
-    crear_solicitud_producto(jid, nombre, telefono, descripcion, referencia_web)
+    sid = crear_solicitud_producto(jid, nombre, telefono, descripcion, referencia_web)
 
     email_ok = False
     try:
@@ -355,16 +374,16 @@ async def reportar_producto_no_encontrado(
         print(f"[alerta_producto] error email: {e}")
 
     aviso = (
-        "🔔 *Producto solicitado NO disponible*\n"
+        f"🔔 *Producto solicitado NO disponible* (Solicitud #{sid})\n"
         f"Cliente: {nombre or 'sin nombre'} ({telefono})\n"
         f"Pidió: {descripcion}\n"
     )
     if referencia_web:
         aviso += f"Referencia (web): {referencia_web}\n"
     aviso += (
-        "\n¿Lo agregamos al catálogo y a qué valor? "
-        "Si sí, cárgalo en el dashboard (🏷️ Productos)."
-    )
+        f"\n¿Lo agregamos? Responde aquí: *autoriza la {sid} a <precio>* "
+        "(ej: \"autoriza la {sid} a 180000\"), o cárgalo en el dashboard."
+    ).replace("{sid}", str(sid))
     wa_ok = False
     for numero in _numeros_alerta():
         try:
@@ -1378,3 +1397,236 @@ async def procesar_mensaje(
     if respuesta:
         registrar_mensaje(jid, "out", respuesta)
     return respuesta
+
+
+# ── Modo administrador: gestión del catálogo por WhatsApp ────────────────
+ADMIN_FOTOS_DIR = os.path.join(os.path.dirname(DB_PATH), "fotos")
+
+
+@function_tool
+def admin_listar_solicitudes(ctx: RunContextWrapper[PlatimContext]) -> str:
+    """Lista las solicitudes de 'producto no encontrado' que están PENDIENTES
+    (las que generó el flujo cuando un cliente pidió algo fuera del catálogo)."""
+    from agent.db import listar_solicitudes_producto
+
+    pendientes = [
+        s for s in listar_solicitudes_producto(100) if s.get("estado") == "pendiente"
+    ]
+    salida = [
+        {
+            "id": s["id"],
+            "cliente": s.get("nombre") or s.get("telefono"),
+            "pidio": s.get("descripcion"),
+            "referencia": s.get("referencia"),
+        }
+        for s in pendientes
+    ]
+    return json.dumps(
+        {"pendientes": len(salida), "solicitudes": salida}, ensure_ascii=False
+    )
+
+
+@function_tool
+def admin_agregar_producto(
+    ctx: RunContextWrapper[PlatimContext],
+    nombre: str,
+    precio_publico: int,
+    categoria: str = "General",
+    precio_volumen: int = 0,
+    descripcion: str = "",
+    uso: str = "",
+) -> str:
+    """Crea un producto NUEVO en el catálogo (disponible al instante para los
+    clientes). 'precio_volumen' es opcional (precio a 100+ unidades del mismo
+    producto)."""
+    from agent.db import crear_producto
+
+    if not (nombre or "").strip():
+        return json.dumps({"error": "Falta el nombre del producto."}, ensure_ascii=False)
+    if not precio_publico or int(precio_publico) <= 0:
+        return json.dumps(
+            {"error": "Falta un precio público válido."}, ensure_ascii=False
+        )
+    codigo = crear_producto(
+        {
+            "nombre": nombre.strip(),
+            "categoria": categoria or "General",
+            "precio_publico": int(precio_publico),
+            "precio_volumen": int(precio_volumen or 0),
+            "descripcion": descripcion or "",
+            "uso": uso or "",
+        }
+    )
+    return json.dumps(
+        {
+            "ok": True,
+            "codigo": codigo,
+            "nombre": nombre.strip(),
+            "precio_publico": int(precio_publico),
+            "sugerir_foto": (
+                "Quedó creado SIN foto. Sugiérele al admin ponerle una: si "
+                "encuentras en la web un enlace de imagen del producto, "
+                "propóneselo y usa admin_poner_foto; o que la suba en el "
+                "dashboard."
+            ),
+        },
+        ensure_ascii=False,
+    )
+
+
+@function_tool
+def admin_autorizar_solicitud(
+    ctx: RunContextWrapper[PlatimContext],
+    id: int,
+    precio_publico: int,
+    precio_volumen: int = 0,
+    categoria: str = "General",
+    nombre: str = "",
+) -> str:
+    """Autoriza una solicitud PENDIENTE: crea el producto con lo que pidió el
+    cliente y el precio que da el admin, y marca la solicitud como 'agregado'.
+    Usa admin_listar_solicitudes para ver los IDs. Si 'nombre' viene vacío, usa
+    la descripción de la solicitud como nombre del producto."""
+    from agent.db import crear_producto, get_solicitud, marcar_solicitud
+
+    sol = get_solicitud(int(id))
+    if not sol:
+        return json.dumps({"error": f"No existe la solicitud #{id}."}, ensure_ascii=False)
+    if not precio_publico or int(precio_publico) <= 0:
+        return json.dumps(
+            {"error": "Falta un precio público válido."}, ensure_ascii=False
+        )
+    nombre_final = (nombre or sol.get("descripcion") or "Producto").strip()
+    codigo = crear_producto(
+        {
+            "nombre": nombre_final,
+            "categoria": categoria or "General",
+            "precio_publico": int(precio_publico),
+            "precio_volumen": int(precio_volumen or 0),
+            "descripcion": sol.get("referencia") or "",
+        }
+    )
+    marcar_solicitud(int(id), "agregado")
+    return json.dumps(
+        {
+            "ok": True,
+            "codigo": codigo,
+            "nombre": nombre_final,
+            "solicitud": int(id),
+            "sugerir_foto": (
+                "Quedó creado SIN foto. Sugiere ponerle una: si hallas en la web "
+                "un enlace de imagen, propóneselo y usa admin_poner_foto; o que "
+                "la suba en el dashboard."
+            ),
+        },
+        ensure_ascii=False,
+    )
+
+
+@function_tool
+def admin_descartar_solicitud(
+    ctx: RunContextWrapper[PlatimContext], id: int
+) -> str:
+    """Marca una solicitud pendiente como 'descartado' (no se va a agregar)."""
+    from agent.db import get_solicitud, marcar_solicitud
+
+    if not get_solicitud(int(id)):
+        return json.dumps({"error": f"No existe la solicitud #{id}."}, ensure_ascii=False)
+    marcar_solicitud(int(id), "descartado")
+    return json.dumps(
+        {"ok": True, "solicitud": int(id), "estado": "descartado"}, ensure_ascii=False
+    )
+
+
+@function_tool
+async def admin_poner_foto(
+    ctx: RunContextWrapper[PlatimContext], codigo: str, url: str
+) -> str:
+    """Pone la foto de un producto a partir del ENLACE de una imagen: la
+    descarga, la convierte a JPEG y la deja lista para que el bot la envíe a los
+    clientes. El enlace debe apuntar a una imagen (jpg/png/webp)."""
+    import httpx
+
+    from agent.db import set_foto
+    from agent.imagen_service import a_jpeg
+
+    codigo = (codigo or "").strip().upper()
+    if not catalogo.obtener(codigo):
+        return json.dumps({"error": f"No existe el producto {codigo}."}, ensure_ascii=False)
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as cli:
+            r = await cli.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            data = r.content
+    except Exception as e:  # noqa: BLE001
+        return json.dumps(
+            {"error": f"No pude descargar la imagen: {e}"}, ensure_ascii=False
+        )
+    if len(data) > 8 * 1024 * 1024:
+        return json.dumps({"error": "La imagen es muy grande (máx 8MB)."}, ensure_ascii=False)
+    jpeg = a_jpeg(data)
+    if not jpeg:
+        return json.dumps(
+            {"error": "El enlace no era una imagen válida. Pide otro enlace o "
+                      "súbela en el dashboard."},
+            ensure_ascii=False,
+        )
+    os.makedirs(ADMIN_FOTOS_DIR, exist_ok=True)
+    archivo = f"{codigo}.jpg"
+    with open(os.path.join(ADMIN_FOTOS_DIR, archivo), "wb") as f:
+        f.write(jpeg)
+    set_foto(codigo, archivo)
+    return json.dumps({"ok": True, "codigo": codigo, "foto": "puesta"}, ensure_ascii=False)
+
+
+ADMIN_PROMPT = """Eres el asistente ADMINISTRATIVO interno de PLATIM por WhatsApp.
+Hablas con el equipo (Patricia o Eathan), NO con clientes. Ayúdales a gestionar
+el catálogo rápido y sin vueltas.
+
+PUEDES:
+- Mostrar las solicitudes de "producto no encontrado" PENDIENTES (admin_listar_solicitudes).
+- AUTORIZAR una solicitud dándole precio (admin_autorizar_solicitud): crea el
+  producto y la marca agregada. Si no dieron precio, pídelo.
+- AGREGAR un producto nuevo cualquiera (admin_agregar_producto) con nombre y precio.
+- DESCARTAR una solicitud (admin_descartar_solicitud).
+- Poner FOTO a un producto desde un enlace de imagen (admin_poner_foto).
+
+REGLAS:
+- Sé breve y directo (es chat de trabajo). Confirma lo hecho con el código del producto.
+- Interpreta órdenes naturales:
+  "autoriza la 12 a 180000" -> admin_autorizar_solicitud(id=12, precio_publico=180000).
+  "agrega Taladro Bosch a 180000, 100+ a 165000" -> admin_agregar_producto(nombre="Taladro Bosch", precio_publico=180000, precio_volumen=165000).
+- Precios en pesos colombianos: "180 mil" / "180000" / "$180.000" = 180000.
+- Después de crear un producto SIEMPRE sugiere ponerle FOTO. Si puedes, busca en la
+  web un enlace de imagen real del producto y propóneselo; si el admin acepta o te
+  pasa un enlace, usa admin_poner_foto. Si el enlace falla, diles que la suban en
+  el dashboard (🏷️ Productos).
+- Si te piden algo fuera de esto (cotizar, atender a un cliente), aclara que aquí
+  es solo gestión interna del catálogo.
+"""
+
+admin_agent = Agent[PlatimContext](
+    name="PLATIM Admin",
+    instructions=ADMIN_PROMPT,
+    model=MODEL,
+    tools=[
+        admin_listar_solicitudes,
+        admin_autorizar_solicitud,
+        admin_agregar_producto,
+        admin_descartar_solicitud,
+        admin_poner_foto,
+        WebSearchTool(),
+    ],
+)
+
+_sesiones_admin: dict[str, SQLiteSession] = {}
+
+
+async def procesar_mensaje_admin(jid: str, texto: str) -> str:
+    """Corre el agente administrativo para un número admin (Patricia/Eathan)."""
+    ctx = PlatimContext(jid=jid)
+    if jid not in _sesiones_admin:
+        _sesiones_admin[jid] = SQLiteSession(f"admin:{jid}", SESSIONS_DB)
+    sesion = _sesiones_admin[jid]
+    result = await Runner.run(admin_agent, texto, context=ctx, session=sesion)
+    return formatear_whatsapp((result.final_output or "").strip())

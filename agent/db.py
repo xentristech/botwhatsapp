@@ -876,5 +876,14 @@ def marcar_solicitud(id_: int, estado: str) -> None:
         )
 
 
+def get_solicitud(id_: int) -> dict | None:
+    """Devuelve una solicitud de producto por su id, o None."""
+    with _lock, _conn() as conn:
+        r = conn.execute(
+            "SELECT * FROM producto_solicitado WHERE id = ?", (id_,)
+        ).fetchone()
+    return dict(r) if r else None
+
+
 # Inicializa la base al importar el modulo.
 init_db()

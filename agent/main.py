@@ -24,7 +24,7 @@ from fastapi import FastAPI, File, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
-from agent.agente import procesar_mensaje
+from agent.agente import es_admin, procesar_mensaje, procesar_mensaje_admin
 from pydantic import BaseModel
 
 from agent import catalogo
@@ -308,6 +308,12 @@ async def _procesar_mensaje_entrante(msg: dict, value: dict) -> None:
     if not texto:
         return
 
+    # Modo administrador: Patricia/Eathan gestionan el catálogo por el mismo
+    # chat (autorizar/agregar productos), en vez de ser atendidos como clientes.
+    if es_admin(jid):
+        await _ejecutar_admin(jid, texto)
+        return
+
     # Registrar el mensaje entrante (dashboard/historial) y avisar en vivo.
     registrar_mensaje(jid, "in", texto, "cliente")
     await _publicar_evento("mensaje_in", {"jid": jid, "texto": texto})
@@ -370,6 +376,21 @@ async def _ejecutar_bot(
         if es_audio:
             await _responder_con_audio(jid, respuesta)
         await _publicar_evento("mensaje_out", {"jid": jid, "texto": respuesta})
+
+
+async def _ejecutar_admin(jid: str, texto: str) -> None:
+    """Atiende a un número administrador (Patricia/Eathan): gestión del catálogo
+    por WhatsApp. No pasa por el flujo/dashboard de clientes."""
+    from agent.whatsapp import send_text
+
+    try:
+        respuesta = await procesar_mensaje_admin(jid, texto)
+    except Exception as e:  # noqa: BLE001
+        print(f"[admin] error: {e}")
+        respuesta = "Ups, hubo un error procesando la orden. Intenta de nuevo."
+    if respuesta:
+        with suppress(Exception):
+            await send_text(jid, respuesta)
 
 
 async def _avisar_formato_no_soportado(jid: str, tipo: str) -> None:
