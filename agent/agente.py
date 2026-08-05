@@ -1626,6 +1626,83 @@ def admin_descartar_solicitud(
 
 
 @function_tool
+def admin_buscar_catalogo(
+    ctx: RunContextWrapper[PlatimContext], query: str
+) -> str:
+    """Busca productos en el catálogo (para encontrar el CÓDIGO y precios antes
+    de editar). Devuelve código, nombre, categoría, precio público, precio 100+ y
+    si está sin stock."""
+    res = catalogo.buscar(query, incluir_sin_stock=True)[:15]
+    salida = [
+        {
+            "codigo": p["codigo"],
+            "nombre": p["nombre"],
+            "categoria": p["categoria"],
+            "precio_publico": int(p.get("precio_publico") or 0),
+            "precio_100_unidades": int(p.get("precio_volumen") or 0),
+            "sin_stock": bool(p.get("sin_stock")),
+        }
+        for p in res
+    ]
+    return json.dumps(
+        {"encontrados": len(salida), "productos": salida}, ensure_ascii=False
+    )
+
+
+@function_tool
+def admin_editar_producto(
+    ctx: RunContextWrapper[PlatimContext],
+    codigo: str,
+    precio_publico: int = 0,
+    precio_volumen: int = -1,
+    nombre: str = "",
+    stock: str = "",
+) -> str:
+    """Edita un producto EXISTENTE del catálogo. Cambia solo lo que indiques:
+    'precio_publico' (>0), 'precio_volumen' (precio 100+; usa 0 para quitar el
+    descuento, -1 = no cambiar), 'nombre', y 'stock' = "agotado" o "disponible".
+    Usa admin_buscar_catalogo para hallar el código."""
+    from agent.db import set_override
+
+    codigo = (codigo or "").strip().upper()
+    if not catalogo.obtener(codigo):
+        return json.dumps({"error": f"No existe el producto {codigo}."}, ensure_ascii=False)
+    campos = {}
+    if precio_publico and int(precio_publico) > 0:
+        campos["precio_publico"] = int(precio_publico)
+    if precio_volumen is not None and int(precio_volumen) >= 0:
+        campos["precio_volumen"] = int(precio_volumen)
+    if nombre and nombre.strip():
+        campos["nombre"] = nombre.strip()
+    if stock:
+        s = stock.strip().lower()
+        if s in ("agotado", "sin stock", "no"):
+            campos["sin_stock"] = 1
+        elif s in ("disponible", "en stock", "si", "sí"):
+            campos["sin_stock"] = 0
+    if not campos:
+        return json.dumps(
+            {"error": "No indicaste qué cambiar."}, ensure_ascii=False
+        )
+    set_override(codigo, campos)
+    p = catalogo.obtener(codigo)
+    return json.dumps(
+        {
+            "ok": True,
+            "codigo": codigo,
+            "cambios": campos,
+            "ahora": {
+                "nombre": p["nombre"],
+                "precio_publico": int(p.get("precio_publico") or 0),
+                "precio_100_unidades": int(p.get("precio_volumen") or 0),
+                "sin_stock": bool(p.get("sin_stock")),
+            },
+        },
+        ensure_ascii=False,
+    )
+
+
+@function_tool
 async def admin_poner_foto(
     ctx: RunContextWrapper[PlatimContext], codigo: str, url: str
 ) -> str:
@@ -1675,15 +1752,29 @@ PUEDES:
 - AUTORIZAR una solicitud dándole precio (admin_autorizar_solicitud): crea el
   producto y la marca agregada. Si no dieron precio, pídelo.
 - AGREGAR un producto nuevo cualquiera (admin_agregar_producto) con nombre y precio.
+- EDITAR un producto existente (admin_editar_producto): cambiar precio público,
+  precio 100+, nombre o marcarlo agotado/disponible. Usa admin_buscar_catalogo
+  para encontrar el código.
+- BUSCAR en el catálogo (admin_buscar_catalogo) por nombre/código.
 - DESCARTAR una solicitud (admin_descartar_solicitud).
 - Poner FOTO a un producto desde un enlace de imagen (admin_poner_foto).
+- INVESTIGAR en la web (búsqueda web): características, precios de mercado,
+  marcas/modelos y productos SIMILARES de cualquier producto.
 
 REGLAS:
 - Sé breve y directo (es chat de trabajo). Confirma lo hecho con el código del producto.
 - Interpreta órdenes naturales:
   "autoriza la 12 a 180000" -> admin_autorizar_solicitud(id=12, precio_publico=180000).
   "agrega Taladro Bosch a 180000, 100+ a 165000" -> admin_agregar_producto(nombre="Taladro Bosch", precio_publico=180000, precio_volumen=165000).
+  "cambia el precio de la SST-027 a 160000" -> admin_editar_producto(codigo="SST-027", precio_publico=160000).
+  "marca agotada la UNF-001" -> admin_editar_producto(codigo="UNF-001", stock="agotado").
 - Precios en pesos colombianos: "180 mil" / "180000" / "$180.000" = 180000.
+- INVESTIGACIÓN antes de fijar precio: cuando vayas a agregar/autorizar un producto
+  o el admin pida ayuda con el precio, USA la búsqueda web para estudiar ese
+  producto Y varios SIMILARES (marcas/modelos típicos, características y precios de
+  mercado en Colombia si es posible). Presenta un breve resumen y un PRECIO o RANGO
+  de referencia para que el admin decida. NO fijes precio tú solo sin que el admin
+  confirme, salvo que ya te haya dado el precio.
 - Después de crear un producto SIEMPRE sugiere ponerle FOTO. Si puedes, busca en la
   web un enlace de imagen real del producto y propóneselo; si el admin acepta o te
   pasa un enlace, usa admin_poner_foto. Si el enlace falla, diles que la suban en
@@ -1700,6 +1791,8 @@ admin_agent = Agent[PlatimContext](
         admin_listar_solicitudes,
         admin_autorizar_solicitud,
         admin_agregar_producto,
+        admin_editar_producto,
+        admin_buscar_catalogo,
         admin_descartar_solicitud,
         admin_poner_foto,
         WebSearchTool(),
