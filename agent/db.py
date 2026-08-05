@@ -155,6 +155,10 @@ def init_db() -> None:
         ocols = [r["name"] for r in conn.execute("PRAGMA table_info(producto_override)")]
         if "sin_stock" not in ocols:
             conn.execute("ALTER TABLE producto_override ADD COLUMN sin_stock INTEGER")
+        # Columna 'referencia' (web) en producto_solicitado — migracion suave.
+        scols = [r["name"] for r in conn.execute("PRAGMA table_info(producto_solicitado)")]
+        if "referencia" not in scols:
+            conn.execute("ALTER TABLE producto_solicitado ADD COLUMN referencia TEXT DEFAULT ''")
         # Columna 'estado_pago' en cotizaciones — migracion suave.
         cotcols = [r["name"] for r in conn.execute("PRAGMA table_info(cotizaciones)")]
         if "estado_pago" not in cotcols:
@@ -813,15 +817,17 @@ def crear_producto(campos: dict) -> str:
 # ── SOLICITUDES DE PRODUCTO NO ENCONTRADO (alerta a Patricia) ────────────
 
 def crear_solicitud_producto(jid: str, nombre: str, telefono: str,
-                             descripcion: str) -> int:
+                             descripcion: str, referencia: str = "") -> int:
     """Registra que un cliente pidió un producto que no está en el catálogo.
+    'referencia' es la referencia de mercado hallada en la web (para Patricia).
     Devuelve el id de la solicitud."""
     with _lock, _conn() as conn:
         cur = conn.execute(
             """INSERT INTO producto_solicitado
-                   (jid, nombre, telefono, descripcion, estado, creado)
-               VALUES (?, ?, ?, ?, 'pendiente', ?)""",
-            (jid, nombre or "", telefono or "", descripcion or "", _now()),
+                   (jid, nombre, telefono, descripcion, referencia, estado, creado)
+               VALUES (?, ?, ?, ?, ?, 'pendiente', ?)""",
+            (jid, nombre or "", telefono or "", descripcion or "",
+             referencia or "", _now()),
         )
         return cur.lastrowid
 

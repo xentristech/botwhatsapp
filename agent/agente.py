@@ -22,6 +22,7 @@ from agents import (
     RunContextWrapper,
     Runner,
     SQLiteSession,
+    WebSearchTool,
     function_tool,
 )
 
@@ -300,29 +301,38 @@ async def enviar_fotos_productos(
 
 @function_tool
 async def reportar_producto_no_encontrado(
-    ctx: RunContextWrapper[PlatimContext], descripcion: str
+    ctx: RunContextWrapper[PlatimContext],
+    descripcion: str,
+    referencia_web: str = "",
 ) -> str:
     """Avisa a la asesora Patricia (correo + WhatsApp) que un cliente pidió un
     producto que NO está en el catálogo (buscar_productos no lo encontró), para
     que ella decida si se agrega y a qué valor. Úsalo UNA sola vez por producto
     faltante y SOLO cuando el cliente muestre interés real de comprarlo/cotizarlo.
     'descripcion' = qué pidió el cliente, lo más claro posible (tipo, material,
-    marca, talla/cantidad si la dijo)."""
+    marca, talla/cantidad si la dijo).
+    'referencia_web' = referencia que encontraste con la búsqueda web (marca/
+    modelo típico, especificaciones y precio referencial de mercado) para AYUDAR
+    a Patricia a decidir. Es solo para Patricia, NUNCA para dársela al cliente
+    como precio nuestro."""
     jid = ctx.context.jid
     estado = get_estado(jid)
     cliente = estado.get("cliente", {})
     nombre = cliente.get("nombre", "")
     telefono = cliente.get("telefono") or jid.split("@")[0]
+    referencia_web = (referencia_web or "").strip()
 
     from agent.db import crear_solicitud_producto
     from agent.email_service import enviar_alerta_producto
     from agent.whatsapp import send_text
 
-    crear_solicitud_producto(jid, nombre, telefono, descripcion)
+    crear_solicitud_producto(jid, nombre, telefono, descripcion, referencia_web)
 
     email_ok = False
     try:
-        email_ok = await enviar_alerta_producto(nombre, telefono, descripcion)
+        email_ok = await enviar_alerta_producto(
+            nombre, telefono, descripcion, referencia_web
+        )
     except Exception as e:  # noqa: BLE001
         print(f"[alerta_producto] error email: {e}")
 
@@ -331,8 +341,12 @@ async def reportar_producto_no_encontrado(
         aviso = (
             "🔔 *Producto solicitado NO disponible*\n"
             f"Cliente: {nombre or 'sin nombre'} ({telefono})\n"
-            f"Pidió: {descripcion}\n\n"
-            "¿Lo agregamos al catálogo y a qué valor? "
+            f"Pidió: {descripcion}\n"
+        )
+        if referencia_web:
+            aviso += f"Referencia (web): {referencia_web}\n"
+        aviso += (
+            "\n¿Lo agregamos al catálogo y a qué valor? "
             "Si sí, cárgalo en el dashboard (🏷️ Productos)."
         )
         await send_text(ASESORA_WHATSAPP, aviso)
@@ -346,10 +360,11 @@ async def reportar_producto_no_encontrado(
             "email_enviado": email_ok,
             "whatsapp_enviado": wa_ok,
             "instruccion": (
-                "Dile al cliente con amabilidad que ese producto no lo tienes "
-                "listado por ahora, que ya lo pasaste a la asesora Patricia "
-                "para confirmar disponibilidad y precio, y que le avisarás. "
-                "NUNCA inventes precio ni disponibilidad."
+                "Pídele al cliente que espere un momento mientras verificas "
+                "disponibilidad en bodega y con la asesora Patricia, y que le "
+                "confirmarás enseguida. NUNCA le des precio ni le digas de una "
+                "que no lo tienes; NUNCA le pases el precio de la web como si "
+                "fuera el nuestro."
             ),
         },
         ensure_ascii=False,
@@ -1118,15 +1133,21 @@ REGLAS:
   cliente pide algo que NO aparece en buscar_productos (ej. una bota o marca
   específica que no listamos), NO lo inventes ni le des precio. Ofrece
   alternativas similares del catálogo si aplican.
-- PRODUCTO NO DISPONIBLE → AVISAR A PATRICIA: cuando el cliente muestre interés
-  real en comprar/cotizar un producto que NO está en el catálogo, llama a
-  reportar_producto_no_encontrado con una descripción clara de lo que pidió
-  (tipo, material, marca, talla/cantidad si la dijo). Eso le avisa a la asesora
-  Patricia por correo y WhatsApp para que decida si se agrega y a qué valor.
-  Llámala UNA sola vez por producto faltante. Luego dile al cliente, con
-  amabilidad, que ese producto no lo tienes listado por ahora, que ya lo pasaste
-  a Patricia para confirmar disponibilidad y precio, y que le avisarás. NUNCA
-  inventes precio ni existencias.
+- PRODUCTO NO DISPONIBLE (no aparece en buscar_productos y el cliente lo quiere
+  de verdad). Haz EXACTAMENTE esto, en este orden:
+  1) Dile al cliente que ESPERE un momento mientras verificas la disponibilidad
+     en bodega y con la asesora, y que le confirmas enseguida (ej: "Permíteme un
+     momento, estoy verificando la disponibilidad de eso en bodega y con nuestra
+     asesora 🔎. Te confirmo enseguida."). NO le digas de una que no lo tienes,
+     NI le des precios.
+  2) Usa la búsqueda web SOLO para encontrar una REFERENCIA de ese producto
+     (marca/modelo típico, características y un precio referencial de mercado)
+     que le sirva a Patricia para decidir. No uses la web para nada más.
+  3) Llama a reportar_producto_no_encontrado con 'descripcion' (lo que pidió el
+     cliente) y 'referencia_web' (lo que encontraste). Eso avisa a Patricia por
+     correo y WhatsApp. Hazlo UNA sola vez por producto faltante.
+  NUNCA inventes precio ni existencias, y NUNCA le pases al cliente el precio de
+  la web como si fuera el nuestro: el precio real lo confirma Patricia.
 - FOTOS: si buscar_productos marca "tiene_foto": true en un producto, envíasela
   al cliente con enviar_fotos_productos (pásale los códigos). Hazlo cuando
   RECOMIENDES ese producto y también al mostrar el RESUMEN de la cotización, para
@@ -1259,6 +1280,7 @@ platim_agent = Agent[PlatimContext](
         buscar_productos,
         enviar_fotos_productos,
         reportar_producto_no_encontrado,
+        WebSearchTool(),
         comparar_productos,
         enviar_catalogo_pdf,
         agregar_item_cotizacion,

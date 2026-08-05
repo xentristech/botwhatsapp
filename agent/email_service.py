@@ -288,9 +288,10 @@ async def enviar_cotizacion_email(cot: dict, pdf_bytes: bytes) -> bool:
 
 
 async def enviar_alerta_producto(nombre: str, telefono: str,
-                                 descripcion: str) -> bool:
+                                 descripcion: str, referencia: str = "") -> bool:
     """Avisa a PLATIM (Patricia) por correo que un cliente pidió un producto
     que NO está en el catálogo, para decidir si se agrega y a qué valor.
+    'referencia' es la referencia de mercado hallada en la web (opcional).
     Va a los correos internos (ventas + info). Devuelve True si se envió."""
     destinatarios = _copias_internas()
     if not destinatarios:
@@ -299,6 +300,11 @@ async def enviar_alerta_producto(nombre: str, telefono: str,
     cliente = nombre or "Cliente sin nombre"
     tel = telefono or "—"
     desc = descripcion or "(sin descripción)"
+    fila_ref = (
+        f'<tr><td style="padding:4px 8px;vertical-align:top;">'
+        f"<strong>Referencia (web):</strong></td><td>{referencia}</td></tr>"
+        if (referencia or "").strip() else ""
+    )
 
     html = f"""\
 <!DOCTYPE html><html lang="es"><head><meta charset="utf-8"></head>
@@ -314,6 +320,7 @@ async def enviar_alerta_producto(nombre: str, telefono: str,
         <tr><td style="padding:4px 8px;"><strong>Cliente:</strong></td><td>{cliente}</td></tr>
         <tr><td style="padding:4px 8px;"><strong>WhatsApp:</strong></td><td>{tel}</td></tr>
         <tr><td style="padding:4px 8px;"><strong>Producto pedido:</strong></td><td>{desc}</td></tr>
+        {fila_ref}
       </table>
       <p style="color:#666;font-size:13px;">Si se agrega, cárgalo en el dashboard
       (🏷️ Productos) con su precio y quedará disponible para cotizar.</p>

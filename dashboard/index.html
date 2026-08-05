@@ -450,7 +450,7 @@
     cuerpo.innerHTML = solic.map(s => `
       <tr>
         <td>${esc(s.nombre || s.telefono || "—")}</td>
-        <td>${esc(s.descripcion || "—")}</td>
+        <td>${esc(s.descripcion || "—")}${s.referencia ? `<div style="font-size:11px;color:#607d8b;margin-top:2px;">🌐 ${esc(s.referencia)}</div>` : ""}</td>
         <td>
           <select onchange="cambiarSolicitud(${s.id}, this.value)"
                   style="border:1px solid var(--borde);border-radius:6px;padding:3px;color:${COLOR[s.estado]||'#333'};">
