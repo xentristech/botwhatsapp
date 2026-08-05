@@ -194,6 +194,19 @@
   <div class="main">
     <div class="panel">
       <h2>Conversaciones</h2>
+      <input id="convBuscar" placeholder="Buscar por nombre, teléfono o mensaje…"
+             oninput="renderConversaciones(convCache)"
+             style="margin:8px 12px 4px;padding:8px 10px;border:1px solid var(--borde);border-radius:8px;font-size:13px;">
+      <select id="convFiltro" onchange="renderConversaciones(convCache)"
+              style="margin:0 12px 8px;padding:8px 10px;border:1px solid var(--borde);border-radius:8px;font-size:13px;">
+        <option value="">Todas las etiquetas</option>
+        <option value="Interesado">Interesado</option>
+        <option value="Cotizó">Cotizó</option>
+        <option value="Compró">Compró ✅</option>
+        <option value="No compró">No compró ❌</option>
+        <option value="Seguimiento">Seguimiento</option>
+        <option value="__sin__">Sin estado</option>
+      </select>
       <div class="body" id="convList"></div>
     </div>
 
@@ -232,6 +245,11 @@
           <thead><tr><th>Cliente</th><th>Fecha</th><th>Hora</th></tr></thead>
           <tbody id="citasBody"></tbody>
         </table>
+        <h2 style="margin-top:4px;">🔔 Productos solicitados</h2>
+        <table>
+          <thead><tr><th>Cliente</th><th>Pidió</th><th>Estado</th></tr></thead>
+          <tbody id="solicBody"></tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -263,11 +281,31 @@
     return `<span class="chip" style="background:${color}">${esc(etiqueta)}</span>`;
   }
 
+  const fmtFechaCorta = ts => {
+    if (!ts) return "—";
+    const d = new Date(ts);
+    if (isNaN(d)) return "—";
+    return d.toLocaleDateString("es-CO", {day:"2-digit", month:"short", year:"numeric"})
+         + " " + d.toLocaleTimeString("es-CO", {hour:"2-digit", minute:"2-digit", hour12:false});
+  };
+
   function renderConversaciones(convs) {
     convCache = convs;
     document.getElementById("nConv").textContent = convs.length;
+    const q = (document.getElementById("convBuscar")?.value || "").trim().toLowerCase();
+    const fEtq = document.getElementById("convFiltro")?.value || "";
+    const lista = convs.filter(c => {
+      const coincideTexto = !q ||
+        (c.nombre || "").toLowerCase().includes(q) ||
+        (c.jid || "").toLowerCase().includes(q) ||
+        (c.empresa || "").toLowerCase().includes(q) ||
+        (c.ultimo_texto || "").toLowerCase().includes(q);
+      const coincideEtq = !fEtq ||
+        (fEtq === "__sin__" ? !c.etiqueta : c.etiqueta === fEtq);
+      return coincideTexto && coincideEtq;
+    });
     const cont = document.getElementById("convList");
-    cont.innerHTML = convs.map(c => `
+    cont.innerHTML = lista.length ? lista.map(c => `
       <div class="conv ${c.jid === selJid ? "sel" : ""}" data-jid="${esc(c.jid)}">
         <div class="top">
           <span class="nom">${esc(c.nombre || "Sin nombre")}${chipHTML(c.etiqueta)}${c.humano ? ' <span style="color:#ef6c00;font-size:11px;">👤</span>' : ''}</span>
@@ -275,7 +313,8 @@
         </div>
         <div class="jid">${esc(c.jid)}${c.empresa ? " · " + esc(c.empresa) : ""}</div>
         <div class="last">${esc(c.ultimo_texto || "")}</div>
-      </div>`).join("");
+        <div class="ini" style="font-size:11px;color:#90a4ae;margin-top:3px;">🕑 Inicio: ${fmtFechaCorta(c.primer_ts)}</div>
+      </div>`).join("") : '<div class="vacio">Sin resultados.</div>';
     cont.querySelectorAll(".conv").forEach(el =>
       el.addEventListener("click", () => abrirConversacion(el.dataset.jid)));
     if (selJid) actualizarBotonModo();
@@ -377,11 +416,12 @@
 
   async function cargarTablas() {
     try {
-      const [leads, cotiz, convs, citas] = await Promise.all([
+      const [leads, cotiz, convs, citas, solic] = await Promise.all([
         fetch("/api/leads").then(r => r.json()),
         fetch("/api/cotizaciones").then(r => r.json()),
         fetch("/api/conversaciones").then(r => r.json()),
         fetch("/api/citas").then(r => r.json()),
+        fetch("/api/solicitudes").then(r => r.json()),
       ]);
       document.getElementById("nLeads").textContent = leads.length;
       document.getElementById("nCotiz").textContent = cotiz.length;
@@ -394,6 +434,40 @@
           <tr><td>${esc(c.nombre || "—")}</td><td>${c.fecha}</td>
           <td>${c.hora}</td></tr>`).join("")
         : '<tr><td colspan="3" style="color:#90a4ae;">Sin citas</td></tr>';
+      renderSolicitudes(solic);
+    } catch (e) { console.error(e); }
+  }
+
+  function renderSolicitudes(solic) {
+    const cuerpo = document.getElementById("solicBody");
+    if (!solic || !solic.length) {
+      cuerpo.innerHTML = '<tr><td colspan="3" style="color:#90a4ae;">Sin solicitudes</td></tr>';
+      return;
+    }
+    const COLOR = { pendiente:"#ef6c00", agregado:"#2e7d32", descartado:"#c62828" };
+    cuerpo.innerHTML = solic.map(s => `
+      <tr>
+        <td>${esc(s.nombre || s.telefono || "—")}</td>
+        <td>${esc(s.descripcion || "—")}</td>
+        <td>
+          <select onchange="cambiarSolicitud(${s.id}, this.value)"
+                  style="border:1px solid var(--borde);border-radius:6px;padding:3px;color:${COLOR[s.estado]||'#333'};">
+            <option value="pendiente" ${s.estado==="pendiente"?"selected":""}>Pendiente</option>
+            <option value="agregado" ${s.estado==="agregado"?"selected":""}>Agregado ✅</option>
+            <option value="descartado" ${s.estado==="descartado"?"selected":""}>Descartado ❌</option>
+          </select>
+        </td>
+      </tr>`).join("");
+  }
+
+  async function cambiarSolicitud(id, estado) {
+    try {
+      await fetch(`/api/solicitud/${id}/estado`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ estado }),
+      });
+      cargarTablas();
     } catch (e) { console.error(e); }
   }
 

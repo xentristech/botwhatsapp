@@ -131,6 +131,16 @@ def init_db() -> None:
                 archivo     TEXT,
                 actualizado TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS producto_solicitado (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                jid         TEXT,
+                nombre      TEXT,
+                telefono    TEXT,
+                descripcion TEXT,
+                estado      TEXT DEFAULT 'pendiente',  -- pendiente | agregado | descartado
+                creado      TEXT
+            );
             """
         )
         # Columna 'origen' en mensajes (cliente | bot | humano) — migracion suave.
@@ -388,6 +398,7 @@ def listar_conversaciones(limite: int = 100) -> list[dict]:
             SELECT m.jid                         AS jid,
                    COUNT(*)                      AS n_mensajes,
                    MAX(m.id)                     AS ultimo_id,
+                   MIN(m.ts)                     AS primer_ts,
                    (SELECT texto FROM mensajes WHERE jid = m.jid
                      ORDER BY id DESC LIMIT 1)   AS ultimo_texto,
                    (SELECT ts FROM mensajes WHERE jid = m.jid
@@ -797,6 +808,41 @@ def crear_producto(campos: dict) -> str:
             ),
         )
         return codigo
+
+
+# ── SOLICITUDES DE PRODUCTO NO ENCONTRADO (alerta a Patricia) ────────────
+
+def crear_solicitud_producto(jid: str, nombre: str, telefono: str,
+                             descripcion: str) -> int:
+    """Registra que un cliente pidió un producto que no está en el catálogo.
+    Devuelve el id de la solicitud."""
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO producto_solicitado
+                   (jid, nombre, telefono, descripcion, estado, creado)
+               VALUES (?, ?, ?, ?, 'pendiente', ?)""",
+            (jid, nombre or "", telefono or "", descripcion or "", _now()),
+        )
+        return cur.lastrowid
+
+
+def listar_solicitudes_producto(limite: int = 100) -> list[dict]:
+    """Solicitudes de producto no encontrado, más recientes primero."""
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM producto_solicitado ORDER BY id DESC LIMIT ?",
+            (limite,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def marcar_solicitud(id_: int, estado: str) -> None:
+    """Cambia el estado de una solicitud (pendiente | agregado | descartado)."""
+    with _lock, _conn() as conn:
+        conn.execute(
+            "UPDATE producto_solicitado SET estado = ? WHERE id = ?",
+            (estado, id_),
+        )
 
 
 # Inicializa la base al importar el modulo.

@@ -42,7 +42,9 @@ from agent.db import (
     listar_cotizaciones,
     listar_leads,
     listar_mensajes,
+    listar_solicitudes_producto,
     marcar_cotizacion_pagada,
+    marcar_solicitud,
     registrar_mensaje,
     set_etiqueta,
     set_foto,
@@ -571,6 +573,25 @@ async def api_conversaciones(limite: int = 100):
 @app.get("/api/citas")
 async def api_citas(limite: int = 100):
     return listar_citas(limite)
+
+
+@app.get("/api/solicitudes")
+async def api_solicitudes(limite: int = 100):
+    """Productos que clientes pidieron y no estaban en el catálogo."""
+    return listar_solicitudes_producto(limite)
+
+
+class SolicitudBody(BaseModel):
+    estado: str
+
+
+@app.post("/api/solicitud/{id_}/estado")
+async def api_solicitud_estado(id_: int, body: SolicitudBody):
+    estado = (body.estado or "").strip()
+    if estado not in ("pendiente", "agregado", "descartado"):
+        return JSONResponse({"error": "Estado inválido"}, status_code=400)
+    marcar_solicitud(id_, estado)
+    return {"ok": True}
 
 
 @app.get("/api/mensajes")

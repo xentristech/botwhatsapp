@@ -66,6 +66,9 @@ PUBLIC_BASE_URL = os.getenv(
 
 # ── Agenda de la asesora Patricia ────────────────────────────────────────
 ASESORA = "Patricia"
+# WhatsApp de la asesora que recibe las alertas de "producto no encontrado".
+# (El correo de la alerta usa las copias internas de email_service: ventas+info.)
+ASESORA_WHATSAPP = os.getenv("ASESORA_WHATSAPP", "573188940939")
 # Franjas de 30 min dentro de 2-4 PM (hora Colombia).
 SLOTS_ASESORA = ["14:00", "14:30", "15:00", "15:30"]
 _HORA_LEGIBLE = {
@@ -296,6 +299,64 @@ async def enviar_fotos_productos(
 
 
 @function_tool
+async def reportar_producto_no_encontrado(
+    ctx: RunContextWrapper[PlatimContext], descripcion: str
+) -> str:
+    """Avisa a la asesora Patricia (correo + WhatsApp) que un cliente pidió un
+    producto que NO está en el catálogo (buscar_productos no lo encontró), para
+    que ella decida si se agrega y a qué valor. Úsalo UNA sola vez por producto
+    faltante y SOLO cuando el cliente muestre interés real de comprarlo/cotizarlo.
+    'descripcion' = qué pidió el cliente, lo más claro posible (tipo, material,
+    marca, talla/cantidad si la dijo)."""
+    jid = ctx.context.jid
+    estado = get_estado(jid)
+    cliente = estado.get("cliente", {})
+    nombre = cliente.get("nombre", "")
+    telefono = cliente.get("telefono") or jid.split("@")[0]
+
+    from agent.db import crear_solicitud_producto
+    from agent.email_service import enviar_alerta_producto
+    from agent.whatsapp import send_text
+
+    crear_solicitud_producto(jid, nombre, telefono, descripcion)
+
+    email_ok = False
+    try:
+        email_ok = await enviar_alerta_producto(nombre, telefono, descripcion)
+    except Exception as e:  # noqa: BLE001
+        print(f"[alerta_producto] error email: {e}")
+
+    wa_ok = False
+    try:
+        aviso = (
+            "🔔 *Producto solicitado NO disponible*\n"
+            f"Cliente: {nombre or 'sin nombre'} ({telefono})\n"
+            f"Pidió: {descripcion}\n\n"
+            "¿Lo agregamos al catálogo y a qué valor? "
+            "Si sí, cárgalo en el dashboard (🏷️ Productos)."
+        )
+        await send_text(ASESORA_WHATSAPP, aviso)
+        wa_ok = True
+    except Exception as e:  # noqa: BLE001
+        print(f"[alerta_producto] error whatsapp: {e}")
+
+    return json.dumps(
+        {
+            "ok": True,
+            "email_enviado": email_ok,
+            "whatsapp_enviado": wa_ok,
+            "instruccion": (
+                "Dile al cliente con amabilidad que ese producto no lo tienes "
+                "listado por ahora, que ya lo pasaste a la asesora Patricia "
+                "para confirmar disponibilidad y precio, y que le avisarás. "
+                "NUNCA inventes precio ni disponibilidad."
+            ),
+        },
+        ensure_ascii=False,
+    )
+
+
+@function_tool
 def comparar_productos(
     ctx: RunContextWrapper[PlatimContext], codigos: list[str]
 ) -> str:
@@ -415,10 +476,11 @@ def registrar_datos_cliente(
     empresa: str = "",
     email: str = "",
     telefono: str = "",
-    es_mayorista: bool = False,
 ) -> str:
-    """Registra contacto del cliente y define tipo de precio.
-    Si es_mayorista=True usa precios de mayoreo para la sesion."""
+    """Registra el contacto del cliente. Todos los clientes son minoristas:
+    la cotizacion SIEMPRE va al precio publico."""
+    # Todos los clientes son minoristas: nunca se usan precios de mayoreo.
+    es_mayorista = False
     jid = ctx.context.jid
     estado = get_estado(jid)
     cliente = estado.setdefault("cliente", {})
@@ -1044,7 +1106,8 @@ necesitar. NUNCA incluyas automaticamente todo el catalogo ni productos no pedid
 
 ===== HERRAMIENTAS Y MECANICA =====
 REGLAS:
-- Pregunta si es cliente minorista o mayorista cuando pregunten precios
+- TODOS los clientes son minoristas: SIEMPRE cotiza al precio público. NUNCA
+  preguntes si es minorista o mayorista, ni menciones precios de mayoreo.
 - SIEMPRE usa buscar_productos antes de mencionar productos. Al recomendar un
   producto, da su NOMBRE, PRECIO y una breve descripción de su uso/beneficio,
   usando SOLO los datos que devuelve la herramienta.
@@ -1052,10 +1115,18 @@ REGLAS:
   especificaciones técnicas, existencias ni datos que la herramienta no te dé. Si
   no tienes un dato, dilo con honestidad y ofrece confirmarlo con un asesor.
 - HONESTIDAD DE CATÁLOGO: PLATIM maneja dotaciones industriales y EPP. Si el
-  cliente pide algo que NO aparece en buscar_productos (ej. herramientas
-  eléctricas de una marca específica), NO lo inventes: dile con amabilidad que no
-  lo tienes listado, ofrece alternativas del catálogo si aplican, o pásalo con un
-  agente humano.
+  cliente pide algo que NO aparece en buscar_productos (ej. una bota o marca
+  específica que no listamos), NO lo inventes ni le des precio. Ofrece
+  alternativas similares del catálogo si aplican.
+- PRODUCTO NO DISPONIBLE → AVISAR A PATRICIA: cuando el cliente muestre interés
+  real en comprar/cotizar un producto que NO está en el catálogo, llama a
+  reportar_producto_no_encontrado con una descripción clara de lo que pidió
+  (tipo, material, marca, talla/cantidad si la dijo). Eso le avisa a la asesora
+  Patricia por correo y WhatsApp para que decida si se agrega y a qué valor.
+  Llámala UNA sola vez por producto faltante. Luego dile al cliente, con
+  amabilidad, que ese producto no lo tienes listado por ahora, que ya lo pasaste
+  a Patricia para confirmar disponibilidad y precio, y que le avisarás. NUNCA
+  inventes precio ni existencias.
 - FOTOS: si buscar_productos marca "tiene_foto": true en un producto, envíasela
   al cliente con enviar_fotos_productos (pásale los códigos). Hazlo cuando
   RECOMIENDES ese producto y también al mostrar el RESUMEN de la cotización, para
@@ -1187,6 +1258,7 @@ platim_agent = Agent[PlatimContext](
     tools=[
         buscar_productos,
         enviar_fotos_productos,
+        reportar_producto_no_encontrado,
         comparar_productos,
         enviar_catalogo_pdf,
         agregar_item_cotizacion,

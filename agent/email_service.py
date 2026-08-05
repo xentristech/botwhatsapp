@@ -285,3 +285,50 @@ async def enviar_cotizacion_email(cot: dict, pdf_bytes: bytes) -> bool:
 
     await _enviar_mensaje(msg, destinatarios)
     return True
+
+
+async def enviar_alerta_producto(nombre: str, telefono: str,
+                                 descripcion: str) -> bool:
+    """Avisa a PLATIM (Patricia) por correo que un cliente pidió un producto
+    que NO está en el catálogo, para decidir si se agrega y a qué valor.
+    Va a los correos internos (ventas + info). Devuelve True si se envió."""
+    destinatarios = _copias_internas()
+    if not destinatarios:
+        return False
+
+    cliente = nombre or "Cliente sin nombre"
+    tel = telefono or "—"
+    desc = descripcion or "(sin descripción)"
+
+    html = f"""\
+<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif;color:#333;background:#f5f5f5;margin:0;">
+  <div style="max-width:600px;margin:0 auto;background:#fff;">
+    <div style="background:#b71c1c;color:#fff;padding:24px;">
+      <h1 style="margin:0;font-size:20px;">🔔 Producto solicitado NO disponible</h1>
+    </div>
+    <div style="padding:24px;">
+      <p>Un cliente pidió por WhatsApp un producto que <strong>no está en el
+      catálogo</strong>. Patricia debe decidir si se agrega y a qué valor.</p>
+      <table style="font-size:15px;margin:12px 0;">
+        <tr><td style="padding:4px 8px;"><strong>Cliente:</strong></td><td>{cliente}</td></tr>
+        <tr><td style="padding:4px 8px;"><strong>WhatsApp:</strong></td><td>{tel}</td></tr>
+        <tr><td style="padding:4px 8px;"><strong>Producto pedido:</strong></td><td>{desc}</td></tr>
+      </table>
+      <p style="color:#666;font-size:13px;">Si se agrega, cárgalo en el dashboard
+      (🏷️ Productos) con su precio y quedará disponible para cotizar.</p>
+    </div>
+    <div style="background:#f5f5f5;padding:16px 24px;color:#999;font-size:12px;">
+      PLATIM · alerta automática del bot · Palmira, Valle del Cauca, Colombia.
+    </div>
+  </div>
+</body></html>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"🔔 Producto solicitado no disponible: {desc[:60]}"
+    msg["From"] = EMAIL_FROM
+    msg["To"] = ", ".join(destinatarios)
+    msg.attach(MIMEText(html, "html", "utf-8"))
+
+    await _enviar_mensaje(msg, destinatarios)
+    return True
