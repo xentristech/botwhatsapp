@@ -1789,10 +1789,14 @@ REGLAS:
   es solo gestión interna del catálogo.
 """
 
+# El agente admin usa un modelo más capaz (obedece mejor las reglas: investigar
+# y proponer sin crear hasta que el admin confirme el precio). Bajo volumen.
+ADMIN_MODEL = os.getenv("ADMIN_MODEL", "gpt-4o")
+
 admin_agent = Agent[PlatimContext](
     name="PLATIM Admin",
     instructions=ADMIN_PROMPT,
-    model=MODEL,
+    model=ADMIN_MODEL,
     tools=[
         admin_listar_solicitudes,
         admin_autorizar_solicitud,
