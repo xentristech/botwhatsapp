@@ -103,6 +103,16 @@ def es_admin(jid: str) -> bool:
     return bool(n) and n in admins
 
 
+# Prefijo del "chat de prueba" del dashboard: en este modo las herramientas NO
+# ejecutan efectos reales (no envían WhatsApp/correo, no avisan a Patricia).
+PRUEBA_PREFIX = "test:"
+
+
+def es_prueba(jid: str) -> bool:
+    """True si la conversación es del chat de prueba del dashboard."""
+    return (jid or "").startswith(PRUEBA_PREFIX)
+
+
 # Franjas de 30 min dentro de 2-4 PM (hora Colombia).
 SLOTS_ASESORA = ["14:00", "14:30", "15:00", "15:30"]
 _HORA_LEGIBLE = {
@@ -353,6 +363,14 @@ async def reportar_producto_no_encontrado(
     a Patricia a decidir. Es solo para Patricia, NUNCA para dársela al cliente
     como precio nuestro."""
     jid = ctx.context.jid
+    if es_prueba(jid):
+        return json.dumps(
+            {"ok": True, "modo_prueba": True,
+             "instruccion": ("Pídele al cliente que espere mientras verificas en "
+                             "bodega y con la asesora; no le des precio ni lo "
+                             "mandes con un humano. (PRUEBA: no se envió alerta real.)")},
+            ensure_ascii=False,
+        )
     estado = get_estado(jid)
     cliente = estado.get("cliente", {})
     nombre = cliente.get("nombre", "")
@@ -384,13 +402,28 @@ async def reportar_producto_no_encontrado(
         f"\n¿Lo agregamos? Responde aquí: *autoriza la {sid} a <precio>* "
         "(ej: \"autoriza la {sid} a 180000\"), o cárgalo en el dashboard."
     ).replace("{sid}", str(sid))
+    from agent.whatsapp import send_template
+
+    params_plantilla = [str(sid), nombre or "sin nombre", descripcion, str(sid)]
     wa_ok = False
     for numero in _numeros_alerta():
+        enviado = False
+        # 1) Plantilla aprobada: llega SIEMPRE (fuera de la ventana de 24h).
         try:
-            await send_text(numero, aviso)
-            wa_ok = True
+            await send_template(
+                numero, "platim_producto_solicitado", "es", params_plantilla
+            )
+            enviado = True
         except Exception as e:  # noqa: BLE001
-            print(f"[alerta_producto] error whatsapp a {numero}: {e}")
+            print(f"[alerta_producto] plantilla falló a {numero}: {e}")
+        # 2) Respaldo: texto libre (solo llega dentro de la ventana de 24h).
+        if not enviado:
+            try:
+                await send_text(numero, aviso)
+                enviado = True
+            except Exception as e:  # noqa: BLE001
+                print(f"[alerta_producto] texto falló a {numero}: {e}")
+        wa_ok = wa_ok or enviado
 
     return json.dumps(
         {
@@ -625,6 +658,13 @@ async def generar_y_enviar_cotizacion(
     Solo llamar cuando el cliente confirme y tenga datos de contacto
     (al menos nombre y email o telefono)."""
     jid = ctx.context.jid
+    if es_prueba(jid):
+        return json.dumps(
+            {"ok": True, "modo_prueba": True,
+             "mensaje": "(PRUEBA) Aquí generaría y enviaría la cotización; no se "
+                        "envió nada real. Dile al cliente que ya quedó lista."},
+            ensure_ascii=False,
+        )
     estado = get_estado(jid)
     items = estado.get("items", [])
     cliente = estado.get("cliente", {})
@@ -825,6 +865,13 @@ async def agendar_cita_asesora(
     disponibilidad con ver_disponibilidad_asesora antes de agendar. Requiere al
     menos el nombre del cliente."""
     jid = ctx.context.jid
+    if es_prueba(jid):
+        return json.dumps(
+            {"ok": True, "modo_prueba": True,
+             "mensaje": "(PRUEBA) Aquí agendaría la cita; no se envió ni guardó "
+                        "nada real."},
+            ensure_ascii=False,
+        )
 
     # Validaciones de fecha/hora dentro de las reglas de atención.
     try:
@@ -1408,6 +1455,35 @@ async def procesar_mensaje(
     if respuesta:
         registrar_mensaje(jid, "out", respuesta)
     return respuesta
+
+
+# ── Chat de PRUEBA del dashboard (agente de cliente, sin efectos reales) ──
+_sesiones_prueba: dict[str, SQLiteSession] = {}
+
+
+async def procesar_mensaje_prueba(texto: str, sesion_id: str = "dashboard") -> str:
+    """Corre el agente de CLIENTE en modo prueba (chat del dashboard): responde
+    igual que con un cliente real, pero SIN efectos externos (no envía WhatsApp
+    ni correo, no avisa a Patricia) y sin registrar nada en el historial."""
+    jid = f"{PRUEBA_PREFIX}{sesion_id}"
+    ctx = PlatimContext(jid=jid)
+    if jid not in _sesiones_prueba:
+        _sesiones_prueba[jid] = SQLiteSession(jid, SESSIONS_DB)
+    sesion = _sesiones_prueba[jid]
+    result = await Runner.run(platim_agent, texto, context=ctx, session=sesion)
+    return formatear_whatsapp((result.final_output or "").strip())
+
+
+async def reiniciar_prueba(sesion_id: str = "dashboard") -> None:
+    """Borra la memoria y la cotización en curso del chat de prueba."""
+    jid = f"{PRUEBA_PREFIX}{sesion_id}"
+    ses = _sesiones_prueba.pop(jid, None)
+    if ses is not None:
+        try:
+            await ses.clear_session()
+        except Exception:  # noqa: BLE001
+            pass
+    save_estado(jid, {"items": [], "cliente": {}, "tipo_precio": "publico"})
 
 
 # ── Modo administrador: gestión del catálogo por WhatsApp ────────────────

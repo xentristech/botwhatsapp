@@ -68,6 +68,39 @@ async def send_text(to: str, texto: str) -> dict:
     })
 
 
+def _param_plantilla(v: str) -> str:
+    """Limpia un valor para usarlo como parámetro de plantilla: Meta no admite
+    saltos de línea, tabs ni >4 espacios seguidos en los parámetros."""
+    s = " ".join(str(v or "").split())
+    return s[:200] or "-"
+
+
+async def send_template(
+    to: str, nombre: str, idioma: str, parametros: list[str]
+) -> dict:
+    """Envía un mensaje de PLANTILLA aprobada (llega aunque el número no haya
+    escrito en las últimas 24h). 'parametros' rellena {{1}}, {{2}}, ... del cuerpo."""
+    componentes = []
+    if parametros:
+        componentes = [{
+            "type": "body",
+            "parameters": [
+                {"type": "text", "text": _param_plantilla(p)} for p in parametros
+            ],
+        }]
+    return await _post_mensaje({
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": _normalizar_numero(to),
+        "type": "template",
+        "template": {
+            "name": nombre,
+            "language": {"code": idioma},
+            "components": componentes,
+        },
+    })
+
+
 async def send_cta_button(to: str, cuerpo: str, boton_texto: str, url: str) -> dict:
     """Envia un mensaje interactivo con un botón que abre una URL (CTA).
     Ideal para el botón 'Pagar' con el link de Mercado Pago."""

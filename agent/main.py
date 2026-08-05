@@ -24,7 +24,13 @@ from fastapi import FastAPI, File, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
-from agent.agente import es_admin, procesar_mensaje, procesar_mensaje_admin
+from agent.agente import (
+    es_admin,
+    procesar_mensaje,
+    procesar_mensaje_admin,
+    procesar_mensaje_prueba,
+    reiniciar_prueba,
+)
 from pydantic import BaseModel
 
 from agent import catalogo
@@ -600,6 +606,30 @@ async def api_citas(limite: int = 100):
 async def api_solicitudes(limite: int = 100):
     """Productos que clientes pidieron y no estaban en el catálogo."""
     return listar_solicitudes_producto(limite)
+
+
+class ProbarBody(BaseModel):
+    texto: str = ""
+    reset: bool = False
+
+
+@app.post("/api/probar")
+async def api_probar(body: ProbarBody):
+    """Chat de PRUEBA del dashboard: conversa con el agente como si fueras
+    cliente, sin efectos reales (no envía WhatsApp/correo ni avisa a Patricia)."""
+    if body.reset:
+        await reiniciar_prueba("dashboard")
+        if not (body.texto or "").strip():
+            return {"respuesta": "", "reiniciado": True}
+    texto = (body.texto or "").strip()
+    if not texto:
+        return JSONResponse({"error": "Falta el texto"}, status_code=400)
+    try:
+        respuesta = await procesar_mensaje_prueba(texto, "dashboard")
+    except Exception as e:  # noqa: BLE001
+        print(f"[probar] error: {e}")
+        return JSONResponse({"error": "Error corriendo el bot de prueba"}, status_code=500)
+    return {"respuesta": respuesta}
 
 
 class SolicitudBody(BaseModel):
