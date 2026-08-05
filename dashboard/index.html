@@ -195,9 +195,9 @@
     <div class="panel">
       <h2>Conversaciones</h2>
       <input id="convBuscar" placeholder="Buscar por nombre, teléfono o mensaje…"
-             oninput="renderConversaciones(convCache)"
+             oninput="filtrarConv()"
              style="margin:8px 12px 4px;padding:8px 10px;border:1px solid var(--borde);border-radius:8px;font-size:13px;">
-      <select id="convFiltro" onchange="renderConversaciones(convCache)"
+      <select id="convFiltro" onchange="filtrarConv()"
               style="margin:0 12px 8px;padding:8px 10px;border:1px solid var(--borde);border-radius:8px;font-size:13px;">
         <option value="">Todas las etiquetas</option>
         <option value="Interesado">Interesado</option>
@@ -209,6 +209,7 @@
         <option value="__sin__">Sin estado</option>
       </select>
       <div class="body" id="convList"></div>
+      <div id="convPag" style="display:flex;align-items:center;justify-content:center;gap:12px;padding:8px;border-top:1px solid var(--borde);font-size:13px;"></div>
     </div>
 
     <div class="panel">
@@ -291,6 +292,12 @@
          + " " + d.toLocaleTimeString("es-CO", {hour:"2-digit", minute:"2-digit", hour12:false});
   };
 
+  const CONV_POR_PAGINA = 20;
+  let convPagina = 1;
+
+  function filtrarConv() { convPagina = 1; renderConversaciones(convCache); }
+  function irPaginaConv(delta) { convPagina += delta; renderConversaciones(convCache); }
+
   function renderConversaciones(convs) {
     convCache = convs;
     document.getElementById("nConv").textContent = convs.length;
@@ -306,8 +313,23 @@
         (fEtq === "__sin__" ? !c.etiqueta : c.etiqueta === fEtq);
       return coincideTexto && coincideEtq;
     });
+    // Paginación (sobre la lista ya filtrada).
+    const totalPaginas = Math.max(1, Math.ceil(lista.length / CONV_POR_PAGINA));
+    if (convPagina > totalPaginas) convPagina = totalPaginas;
+    if (convPagina < 1) convPagina = 1;
+    const inicio = (convPagina - 1) * CONV_POR_PAGINA;
+    const paginaItems = lista.slice(inicio, inicio + CONV_POR_PAGINA);
+    const pag = document.getElementById("convPag");
+    if (pag) {
+      pag.innerHTML = lista.length > CONV_POR_PAGINA ? `
+        <button onclick="irPaginaConv(-1)" ${convPagina === 1 ? "disabled" : ""}
+                style="padding:4px 12px;border:1px solid var(--borde);border-radius:6px;background:#fff;cursor:pointer;">◀</button>
+        <span>${convPagina} / ${totalPaginas} · ${lista.length} conv.</span>
+        <button onclick="irPaginaConv(1)" ${convPagina === totalPaginas ? "disabled" : ""}
+                style="padding:4px 12px;border:1px solid var(--borde);border-radius:6px;background:#fff;cursor:pointer;">▶</button>` : "";
+    }
     const cont = document.getElementById("convList");
-    cont.innerHTML = lista.length ? lista.map(c => `
+    cont.innerHTML = paginaItems.length ? paginaItems.map(c => `
       <div class="conv ${c.jid === selJid ? "sel" : ""}" data-jid="${esc(c.jid)}">
         <div class="top">
           <span class="nom">${esc(c.nombre || "Sin nombre")}${chipHTML(c.etiqueta)}${c.humano ? ' <span style="color:#ef6c00;font-size:11px;">👤</span>' : ''}</span>
@@ -421,7 +443,7 @@
       const [leads, cotiz, convs, citas, solic] = await Promise.all([
         fetch("/api/leads").then(r => r.json()),
         fetch("/api/cotizaciones").then(r => r.json()),
-        fetch("/api/conversaciones").then(r => r.json()),
+        fetch("/api/conversaciones?limite=500").then(r => r.json()),
         fetch("/api/citas").then(r => r.json()),
         fetch("/api/solicitudes").then(r => r.json()),
       ]);
