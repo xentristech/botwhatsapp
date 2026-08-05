@@ -67,9 +67,23 @@ PUBLIC_BASE_URL = os.getenv(
 
 # ── Agenda de la asesora Patricia ────────────────────────────────────────
 ASESORA = "Patricia"
-# WhatsApp de la asesora que recibe las alertas de "producto no encontrado".
+# WhatsApp(s) que reciben las alertas de "producto no encontrado".
+# Uno o varios números separados por coma (Patricia + avisos internos).
 # (El correo de la alerta usa las copias internas de email_service: ventas+info.)
-ASESORA_WHATSAPP = os.getenv("ASESORA_WHATSAPP", "573188940939")
+ASESORA_WHATSAPP = os.getenv(
+    "ASESORA_WHATSAPP", "573188940939,573003730876"
+)
+
+
+def _numeros_alerta() -> list[str]:
+    """Lista de números (sin duplicados) que reciben las alertas por WhatsApp."""
+    vistos, salida = set(), []
+    for n in ASESORA_WHATSAPP.split(","):
+        n = n.strip()
+        if n and n not in vistos:
+            vistos.add(n)
+            salida.append(n)
+    return salida
 # Franjas de 30 min dentro de 2-4 PM (hora Colombia).
 SLOTS_ASESORA = ["14:00", "14:30", "15:00", "15:30"]
 _HORA_LEGIBLE = {
@@ -336,23 +350,24 @@ async def reportar_producto_no_encontrado(
     except Exception as e:  # noqa: BLE001
         print(f"[alerta_producto] error email: {e}")
 
+    aviso = (
+        "🔔 *Producto solicitado NO disponible*\n"
+        f"Cliente: {nombre or 'sin nombre'} ({telefono})\n"
+        f"Pidió: {descripcion}\n"
+    )
+    if referencia_web:
+        aviso += f"Referencia (web): {referencia_web}\n"
+    aviso += (
+        "\n¿Lo agregamos al catálogo y a qué valor? "
+        "Si sí, cárgalo en el dashboard (🏷️ Productos)."
+    )
     wa_ok = False
-    try:
-        aviso = (
-            "🔔 *Producto solicitado NO disponible*\n"
-            f"Cliente: {nombre or 'sin nombre'} ({telefono})\n"
-            f"Pidió: {descripcion}\n"
-        )
-        if referencia_web:
-            aviso += f"Referencia (web): {referencia_web}\n"
-        aviso += (
-            "\n¿Lo agregamos al catálogo y a qué valor? "
-            "Si sí, cárgalo en el dashboard (🏷️ Productos)."
-        )
-        await send_text(ASESORA_WHATSAPP, aviso)
-        wa_ok = True
-    except Exception as e:  # noqa: BLE001
-        print(f"[alerta_producto] error whatsapp: {e}")
+    for numero in _numeros_alerta():
+        try:
+            await send_text(numero, aviso)
+            wa_ok = True
+        except Exception as e:  # noqa: BLE001
+            print(f"[alerta_producto] error whatsapp a {numero}: {e}")
 
     return json.dumps(
         {
