@@ -207,6 +207,8 @@
         <option value="No compró">No compró ❌</option>
         <option value="No potencial">No potencial 🚫</option>
         <option value="Seguimiento">Seguimiento</option>
+        <option value="Prueba">Prueba 🧪</option>
+        <option value="Equipo">Equipo 👷</option>
         <option value="__sin__">Sin estado</option>
       </select>
       <div class="body" id="convList"></div>
@@ -225,6 +227,8 @@
             <option value="No compró">No compró ❌</option>
             <option value="No potencial">No potencial 🚫</option>
             <option value="Seguimiento">Seguimiento</option>
+            <option value="Prueba">Prueba 🧪</option>
+            <option value="Equipo">Equipo 👷</option>
           </select>
           <button id="btnModo" class="btn-modo" style="display:none" onclick="toggleModo()">Pausar bot</button>
         </span>
@@ -273,7 +277,8 @@
 
   const COLOR_ETIQUETA = {
     "Interesado": "#1976d2", "Cotizó": "#ef6c00", "Compró": "#2e7d32",
-    "No compró": "#c62828", "No potencial": "#546e7a", "Seguimiento": "#6a1b9a"
+    "No compró": "#c62828", "No potencial": "#546e7a", "Seguimiento": "#6a1b9a",
+    "Prueba": "#00897b", "Equipo": "#5d4037"
   };
   function etiquetaDe(jid) {
     const c = convCache.find(x => x.jid === jid);
