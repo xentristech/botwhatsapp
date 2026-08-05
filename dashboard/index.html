@@ -172,7 +172,8 @@
           <div><label>Nombre *</label><input id="np_nombre"></div>
           <div><label>Categoría</label><input id="np_categoria" placeholder="General"></div>
           <div><label>Precio público</label><input id="np_pub" type="number"></div>
-          <div><label>Precio mayoreo</label><input id="np_may" type="number"></div>
+          <div><label>Precio 100+ un.</label><input id="np_vol" type="number"
+               title="Precio unitario cuando el cliente lleva 100 o más (0 = sin descuento)"></div>
           <div class="fn-full"><label>Uso / descripción (ayuda al bot a encontrarlo)</label><input id="np_uso"></div>
         </div>
         <div class="fn-acciones">
@@ -554,8 +555,9 @@
           <div class="pinputs">
             <div><label>Precio público</label>
               <input class="precio pub" type="number" value="${p.precio_publico}"></div>
-            <div><label>Precio mayoreo</label>
-              <input class="precio may" type="number" value="${p.precio_mayoreo}"></div>
+            <div><label>Precio 100+ un.</label>
+              <input class="precio vol" type="number" value="${p.precio_volumen || 0}"
+                     title="Precio unitario cuando el cliente lleva 100 o más de este producto (0 = sin descuento)"></div>
             <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#c62828;">
               <input type="checkbox" class="stock" ${p.sin_stock ? "checked" : ""}> Sin stock</label>
             <button onclick="guardarProducto('${esc(p.codigo)}', this)">Guardar</button>
@@ -588,7 +590,7 @@
       nombre,
       categoria: document.getElementById("np_categoria").value.trim() || "General",
       precio_publico: parseInt(document.getElementById("np_pub").value, 10) || 0,
-      precio_mayoreo: parseInt(document.getElementById("np_may").value, 10) || 0,
+      precio_volumen: parseInt(document.getElementById("np_vol").value, 10) || 0,
       uso: document.getElementById("np_uso").value.trim(),
     };
     okSpan.textContent = "…";
@@ -599,7 +601,7 @@
       }).then(r => r.json());
       if (r.ok) {
         okSpan.textContent = "✓ Creado: " + r.codigo;
-        ["np_nombre","np_categoria","np_pub","np_may","np_uso"].forEach(id =>
+        ["np_nombre","np_categoria","np_pub","np_vol","np_uso"].forEach(id =>
           document.getElementById(id).value = "");
         cargarProductos();
       } else { okSpan.textContent = "✕ " + (r.error || "error"); }
@@ -610,14 +612,14 @@
   async function guardarProducto(codigo, btn) {
     const row = btn.closest(".prod-row");
     const pub = parseInt(row.querySelector(".pub").value, 10);
-    const may = parseInt(row.querySelector(".may").value, 10);
+    const vol = parseInt(row.querySelector(".vol").value, 10) || 0;
     const sin = row.querySelector(".stock").checked;
     const okSpan = row.querySelector(".ok");
     okSpan.textContent = "…";
     try {
       const r = await fetch("/api/producto", {
         method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ codigo, precio_publico: pub, precio_mayoreo: may, sin_stock: sin }),
+        body: JSON.stringify({ codigo, precio_publico: pub, precio_volumen: vol, sin_stock: sin }),
       }).then(r => r.json());
       okSpan.textContent = r.ok ? "✓ Guardado" : ("✕ " + (r.error || ""));
       if (r.ok) cargarProductos();

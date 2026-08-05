@@ -658,6 +658,7 @@ async def api_productos(q: str = "", categoria: str = "", limite: int = 60):
             "categoria": p["categoria"],
             "precio_publico": p["precio_publico"],
             "precio_mayoreo": p["precio_mayoreo"],
+            "precio_volumen": int(p.get("precio_volumen") or 0),
             "observaciones": p.get("observaciones", ""),
             "sin_stock": bool(p.get("sin_stock")),
             "tiene_foto": bool(p.get("tiene_foto")),
@@ -701,6 +702,7 @@ class ProductoNuevoBody(BaseModel):
     categoria: str = "General"
     precio_publico: int = 0
     precio_mayoreo: int = 0
+    precio_volumen: int = 0
     codigo: str | None = None
     descripcion: str | None = None
     uso: str | None = None
@@ -720,6 +722,7 @@ async def api_producto_nuevo(body: ProductoNuevoBody):
         "categoria": (body.categoria or "General").strip(),
         "precio_publico": body.precio_publico,
         "precio_mayoreo": body.precio_mayoreo,
+        "precio_volumen": body.precio_volumen,
         "descripcion": (body.descripcion or "").strip(),
         "uso": (body.uso or "").strip(),
     })
@@ -730,6 +733,7 @@ class ProductoBody(BaseModel):
     codigo: str
     precio_publico: int | None = None
     precio_mayoreo: int | None = None
+    precio_volumen: int | None = None
     nombre: str | None = None
     observaciones: str | None = None
     sin_stock: bool | None = None
@@ -746,6 +750,8 @@ async def api_producto(body: ProductoBody):
         campos["precio_publico"] = body.precio_publico
     if body.precio_mayoreo is not None:
         campos["precio_mayoreo"] = body.precio_mayoreo
+    if body.precio_volumen is not None:
+        campos["precio_volumen"] = body.precio_volumen
     if body.nombre is not None and body.nombre.strip():
         campos["nombre"] = body.nombre.strip()
     if body.observaciones is not None:

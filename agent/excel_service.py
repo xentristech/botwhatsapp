@@ -20,15 +20,15 @@ PUBLIC_BASE_URL = os.getenv(
 # Orden y encabezados de las columnas del Excel.
 COLUMNAS = [
     "codigo", "categoria", "nombre", "descripcion", "material", "uso",
-    "tallas", "colores", "precio_publico", "precio_mayoreo", "marca",
-    "observaciones", "sin_stock",
+    "tallas", "colores", "precio_publico", "precio_volumen", "precio_mayoreo",
+    "marca", "observaciones", "sin_stock",
 ]
 ENCABEZADOS = {
     "codigo": "Código", "categoria": "Categoría", "nombre": "Nombre",
     "descripcion": "Descripción", "material": "Material", "uso": "Uso",
     "tallas": "Tallas", "colores": "Colores", "precio_publico": "Precio público",
-    "precio_mayoreo": "Precio mayoreo", "marca": "Marca",
-    "observaciones": "Observaciones", "sin_stock": "Sin stock",
+    "precio_volumen": "Precio 100+ un.", "precio_mayoreo": "Precio mayoreo",
+    "marca": "Marca", "observaciones": "Observaciones", "sin_stock": "Sin stock",
 }
 
 
@@ -109,6 +109,7 @@ def importar_xlsx(contenido: bytes) -> dict:
             continue
         pub = _to_int(val(row, "precio_publico"))
         may = _to_int(val(row, "precio_mayoreo"))
+        vol = _to_int(val(row, "precio_volumen"))
         sin = 1 if str(val(row, "sin_stock") or "").strip().lower() in _SI else 0
         obs = val(row, "observaciones")
 
@@ -118,6 +119,8 @@ def importar_xlsx(contenido: bytes) -> dict:
                 campos["precio_publico"] = pub
             if may is not None:
                 campos["precio_mayoreo"] = may
+            if vol is not None:
+                campos["precio_volumen"] = vol
             if nombre:
                 campos["nombre"] = nombre
             if obs is not None:
@@ -134,6 +137,7 @@ def importar_xlsx(contenido: bytes) -> dict:
                 "categoria": str(val(row, "categoria") or "General"),
                 "precio_publico": pub or 0,
                 "precio_mayoreo": may or 0,
+                "precio_volumen": vol or 0,
                 "descripcion": str(val(row, "descripcion") or ""),
                 "uso": str(val(row, "uso") or ""),
             })

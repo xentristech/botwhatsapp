@@ -268,13 +268,17 @@ def buscar_productos(
                 "tallas": p["tallas"],
                 "colores": p["colores"],
                 "marca": p["marca"],
-                "precio": catalogo.precio_de(p, es_mayorista),
+                "precio": int(p.get("precio_publico") or 0),
+                "precio_100_unidades": int(p.get("precio_volumen") or 0),
                 "observaciones": p["observaciones"],
                 "tiene_foto": bool(p.get("tiene_foto")),
             }
         )
     return json.dumps(
-        {"encontrados": len(salida), "tipo_precio": estado["tipo_precio"],
+        {"encontrados": len(salida),
+         "nota_precio": ("'precio' es unitario al público. "
+                         "'precio_100_unidades' (si es > 0) es el precio unitario "
+                         "cuando el cliente lleva 100 o más de ESE producto."),
          "productos": salida},
         ensure_ascii=False,
     )
@@ -409,7 +413,8 @@ def comparar_productos(
                 "tallas": p["tallas"],
                 "colores": p["colores"],
                 "marca": p["marca"],
-                "precio": catalogo.precio_de(p, es_mayorista),
+                "precio": int(p.get("precio_publico") or 0),
+                "precio_100_unidades": int(p.get("precio_volumen") or 0),
                 "observaciones": p["observaciones"],
             }
         )
@@ -458,19 +463,24 @@ def agregar_item_cotizacion(
     jid = ctx.context.jid
     cantidad = max(1, int(cantidad))
 
-    # Si el precio no viene o viene 0, lo tomamos del catalogo segun tipo.
+    # Precios unitarios base del catalogo (publico y volumen 100+). El precio
+    # efectivo lo calcula agregar_item_estado segun la cantidad FINAL.
     prod = catalogo.obtener(codigo)
-    if (not precio or precio <= 0) and prod:
-        estado = get_estado(jid)
-        precio = catalogo.precio_de(prod, estado.get("tipo_precio") == "mayoreo")
-    precio = int(precio or 0)
+    precio_publico = int((prod.get("precio_publico") if prod else 0) or 0)
+    precio_volumen = int((prod.get("precio_volumen") if prod else 0) or 0)
+    # Si el modelo pasó un precio válido y el producto no está en catálogo, se
+    # respeta como precio público (caso raro de ítem fuera de catálogo).
+    if not prod and precio and precio > 0:
+        precio_publico = int(precio)
 
     item = {
         "codigo": codigo,
         "nombre": nombre or (prod["nombre"] if prod else codigo),
         "cantidad": cantidad,
-        "precio": precio,
-        "subtotal": precio * cantidad,
+        "precio_publico": precio_publico,
+        "precio_volumen": precio_volumen,
+        "precio": precio_publico,          # se recalcula en agregar_item_estado
+        "subtotal": precio_publico * cantidad,
     }
 
     # Agregado ATÓMICO: leer-modificar-guardar bajo el candado de la DB para que
@@ -536,12 +546,14 @@ def registrar_datos_cliente(
     cambio_tipo = nuevo_tipo != estado.get("tipo_precio")
     estado["tipo_precio"] = nuevo_tipo
 
-    # Si cambio el tipo de precio, recalcular items existentes.
+    # Recalcular items existentes respetando el precio por cantidad (volumen).
     if cambio_tipo:
         for it in estado["items"]:
             prod = catalogo.obtener(it["codigo"])
             if prod:
-                it["precio"] = catalogo.precio_de(prod, es_mayorista)
+                it["precio_publico"] = int(prod.get("precio_publico") or 0)
+                it["precio_volumen"] = int(prod.get("precio_volumen") or 0)
+                it["precio"] = catalogo.precio_por_cantidad(prod, it["cantidad"])
                 it["subtotal"] = it["precio"] * it["cantidad"]
 
     save_estado(jid, estado)
@@ -1138,6 +1150,14 @@ necesitar. NUNCA incluyas automaticamente todo el catalogo ni productos no pedid
 REGLAS:
 - TODOS los clientes son minoristas: SIEMPRE cotiza al precio público. NUNCA
   preguntes si es minorista o mayorista, ni menciones precios de mayoreo.
+- PRECIO POR VOLUMEN (100+ unidades): si un producto trae "precio_100_unidades"
+  mayor que 0, ese es el precio unitario cuando el cliente lleva 100 o más de
+  ESE mismo producto. Úsalo como incentivo: cuando el cliente pida cantidades
+  altas (cerca de 100) o pregunte por descuentos, cuéntale que "a partir de 100
+  unidades el precio por unidad baja a $X". El sistema aplica ese precio SOLO y
+  automáticamente cuando la cantidad del producto llega a 100; por debajo de 100
+  es el precio público. No lo apliques manualmente ni lo ofrezcas para productos
+  cuyo precio_100_unidades sea 0.
 - SIEMPRE usa buscar_productos antes de mencionar productos. Al recomendar un
   producto, da su NOMBRE, PRECIO y una breve descripción de su uso/beneficio,
   usando SOLO los datos que devuelve la herramienta.

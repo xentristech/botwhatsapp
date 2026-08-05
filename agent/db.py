@@ -104,6 +104,7 @@ def init_db() -> None:
                 codigo         TEXT PRIMARY KEY,
                 precio_publico INTEGER,
                 precio_mayoreo INTEGER,
+                precio_volumen INTEGER,
                 nombre         TEXT,
                 observaciones  TEXT,
                 sin_stock      INTEGER,
@@ -121,6 +122,7 @@ def init_db() -> None:
                 colores        TEXT,
                 precio_publico INTEGER,
                 precio_mayoreo INTEGER,
+                precio_volumen INTEGER,
                 marca          TEXT,
                 observaciones  TEXT,
                 creado         TEXT
@@ -159,6 +161,11 @@ def init_db() -> None:
         scols = [r["name"] for r in conn.execute("PRAGMA table_info(producto_solicitado)")]
         if "referencia" not in scols:
             conn.execute("ALTER TABLE producto_solicitado ADD COLUMN referencia TEXT DEFAULT ''")
+        # Columna 'precio_volumen' (3er precio, 100+ un.) — migracion suave.
+        for tabla in ("producto_override", "producto_nuevo"):
+            tcols = [r["name"] for r in conn.execute(f"PRAGMA table_info({tabla})")]
+            if "precio_volumen" not in tcols:
+                conn.execute(f"ALTER TABLE {tabla} ADD COLUMN precio_volumen INTEGER")
         # Columna 'estado_pago' en cotizaciones — migracion suave.
         cotcols = [r["name"] for r in conn.execute("PRAGMA table_info(cotizaciones)")]
         if "estado_pago" not in cotcols:
@@ -478,7 +485,16 @@ def agregar_item_estado(jid: str, item: dict) -> dict:
     leer-modificar-guardar bajo el mismo _lock y conexion). Evita que llamadas
     concurrentes a agregar_item se pisen (el modelo suele llamarlas en paralelo
     cuando el cliente pide varios productos en un mismo mensaje).
+    El precio unitario se RECALCULA segun la cantidad final (aplica el precio de
+    volumen si se alcanzan 100+ unidades del mismo producto).
     Devuelve {'items': [...], 'total': n}."""
+    from agent import catalogo  # import perezoso para evitar ciclos
+
+    def _precio(it: dict) -> int:
+        pub = it.get("precio_publico", it.get("precio", 0))
+        vol = it.get("precio_volumen", 0)
+        return catalogo.precio_efectivo(pub, vol, it.get("cantidad", 0))
+
     with _lock, _conn() as conn:
         row = conn.execute(
             "SELECT tipo_precio, items_json, cliente_json "
@@ -496,10 +512,17 @@ def agregar_item_estado(jid: str, item: dict) -> dict:
         for it in items:
             if it["codigo"] == item["codigo"]:
                 it["cantidad"] += item["cantidad"]
-                it["precio"] = item["precio"]
+                # Conserva/actualiza los precios unitarios base del catalogo.
+                if item.get("precio_publico") is not None:
+                    it["precio_publico"] = item["precio_publico"]
+                if item.get("precio_volumen") is not None:
+                    it["precio_volumen"] = item["precio_volumen"]
+                it["precio"] = _precio(it)
                 it["subtotal"] = it["precio"] * it["cantidad"]
                 break
         else:
+            item["precio"] = _precio(item)
+            item["subtotal"] = item["precio"] * item["cantidad"]
             items.append(item)
         conn.execute(
             """
@@ -690,12 +713,12 @@ def get_overrides() -> dict:
 def set_override(codigo: str, campos: dict) -> None:
     """Guarda/actualiza el ajuste de un producto. Solo toca los campos dados."""
     codigo = (codigo or "").strip().upper()
-    permitidos = {"precio_publico", "precio_mayoreo", "nombre", "observaciones",
-                  "sin_stock"}
+    permitidos = {"precio_publico", "precio_mayoreo", "precio_volumen", "nombre",
+                  "observaciones", "sin_stock"}
     campos = {k: v for k, v in campos.items() if k in permitidos}
     if not campos:
         return
-    for k in ("precio_publico", "precio_mayoreo"):
+    for k in ("precio_publico", "precio_mayoreo", "precio_volumen"):
         if k in campos and campos[k] is not None and campos[k] != "":
             campos[k] = int(campos[k])
     if "sin_stock" in campos:
@@ -723,8 +746,8 @@ def set_override(codigo: str, campos: dict) -> None:
 def listar_productos_nuevos() -> list[dict]:
     """Productos creados desde el dashboard (se suman al catálogo del bot)."""
     campos = ["codigo", "categoria", "nombre", "descripcion", "material", "uso",
-              "tallas", "colores", "precio_publico", "precio_mayoreo", "marca",
-              "observaciones"]
+              "tallas", "colores", "precio_publico", "precio_mayoreo",
+              "precio_volumen", "marca", "observaciones"]
     with _lock, _conn() as conn:
         rows = conn.execute("SELECT * FROM producto_nuevo ORDER BY creado DESC").fetchall()
     return [{k: dict(r).get(k) for k in campos} for r in rows]
@@ -792,8 +815,9 @@ def crear_producto(campos: dict) -> str:
             """
             INSERT OR REPLACE INTO producto_nuevo
                 (codigo, categoria, nombre, descripcion, material, uso, tallas,
-                 colores, precio_publico, precio_mayoreo, marca, observaciones, creado)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 colores, precio_publico, precio_mayoreo, precio_volumen, marca,
+                 observaciones, creado)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 codigo,
@@ -806,6 +830,7 @@ def crear_producto(campos: dict) -> str:
                 campos.get("colores", "") or "—",
                 int(campos.get("precio_publico") or 0),
                 int(campos.get("precio_mayoreo") or 0),
+                int(campos.get("precio_volumen") or 0),
                 campos.get("marca", "") or "—",
                 campos.get("observaciones", ""),
                 _now(),

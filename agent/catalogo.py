@@ -240,3 +240,27 @@ def obtener(codigo: str) -> dict | None:
 def precio_de(producto: dict, es_mayorista: bool = False) -> int:
     """Devuelve el precio aplicable segun tipo de cliente."""
     return producto["precio_mayoreo"] if es_mayorista else producto["precio_publico"]
+
+
+# ── Tercer precio: por volumen (100+ unidades del mismo producto) ─────────
+UMBRAL_VOLUMEN = 100  # a partir de esta cantidad aplica el precio de volumen
+
+
+def precio_efectivo(precio_publico, precio_volumen, cantidad: int) -> int:
+    """Precio unitario aplicable segun la cantidad: si se piden UMBRAL_VOLUMEN o
+    mas unidades y el producto tiene precio_volumen (> 0), usa ese; si no, el
+    precio publico."""
+    pub = int(precio_publico or 0)
+    vol = int(precio_volumen or 0)
+    if int(cantidad or 0) >= UMBRAL_VOLUMEN and vol > 0:
+        return vol
+    return pub
+
+
+def precio_por_cantidad(producto: dict, cantidad: int) -> int:
+    """Precio unitario de un producto del catalogo segun la cantidad pedida."""
+    return precio_efectivo(
+        producto.get("precio_publico", 0),
+        producto.get("precio_volumen", 0),
+        cantidad,
+    )
