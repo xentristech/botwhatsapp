@@ -253,11 +253,15 @@ async def recibir_webhook(request: Request):
                 value = change.get("value", {})
                 mensajes = value.get("messages", [])
                 for msg in mensajes:
-                    await _procesar_mensaje_entrante(msg, value)
+                    # En segundo plano: Meta exige el 200 rápido, y algunos flujos
+                    # (admin con gpt-4o + búsqueda web, audio) tardan 20-40s. La
+                    # deduplicación por msg_id es lo primero dentro, así que dos
+                    # entregas del mismo mensaje no se procesan doble.
+                    asyncio.create_task(_procesar_mensaje_entrante(msg, value))
     except Exception as e:  # noqa: BLE001
         print(f"Error procesando webhook: {e}")
 
-    # Meta exige responder 200 rapido.
+    # Responder 200 de inmediato (el procesamiento sigue en segundo plano).
     return JSONResponse({"status": "received"})
 
 
