@@ -1717,3 +1717,13 @@ async def procesar_mensaje_admin(jid: str, texto: str) -> str:
     sesion = _sesiones_admin[jid]
     result = await Runner.run(admin_agent, texto, context=ctx, session=sesion)
     return formatear_whatsapp((result.final_output or "").strip())
+
+
+async def reiniciar_admin(jid: str = "dashboard") -> None:
+    """Borra la memoria de una sesión admin (p. ej. la consola del dashboard)."""
+    ses = _sesiones_admin.pop(jid, None)
+    if ses is not None:
+        try:
+            await ses.clear_session()
+        except Exception:  # noqa: BLE001
+            pass
